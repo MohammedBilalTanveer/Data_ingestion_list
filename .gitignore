@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+venv/
+.venv/
+env/
+ENV/
+
+# Environment variables — never commit secrets
+.env
+.env.local
+.env.*.local
+backend/.env
+
+# Downloaded PDFs — large binary files; re-downloaded on demand
+output/
+voter_official/output/
+backend/output/
+files/output/
+
+# Google / cloud service account keys — SENSITIVE
+# Matches the pattern: <project>-<project-id>-<hex-hash>.json
+voter-extraction-*.json
+*-service-account*.json
+*-credentials*.json
+
+# Tesseract / OCR temp files
+*.xlsx
+temp_pdfs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Frontend build artifacts (handled by Vercel)
+voter_official/frontend/dist/
+voter_official/frontend/node_modules/

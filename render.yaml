@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: voter-list-api
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn backend_api:app --config gunicorn.conf.py
+    envVars:
+      - key: FRONTEND_URL
+        sync: false           # Set this in Render dashboard to your Vercel URL
+      - key: PDF_STORAGE_PATH
+        value: /opt/render/project/pdfs
+      - key: DISTRICT
+        value: BANGALORE URBAN
+      - key: AC_NUMBER
+        value: "88"
+    disk:
+      name: pdf-storage
+      mountPath: /opt/render/project/pdfs
+      sizeGB: 5
