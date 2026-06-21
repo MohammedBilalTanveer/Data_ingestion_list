@@ -17,7 +17,18 @@ from flask import send_file
 from pathlib import Path
 from dotenv import load_dotenv
 
+# LOAD ENVIRONMENT VARIABLES FIRST (before any other initialization)
 load_dotenv()
+
+from storage import get_storage_backend
+
+# Initialize storage backend (S3 or local)
+try:
+    storage = get_storage_backend()
+    print(f"✓ Storage initialized: {storage.__class__.__name__}")
+except Exception as e:
+    print(f"✗ Storage error: {str(e)}")
+    raise
 
 # Configuration
 app = Flask(__name__)
@@ -71,22 +82,19 @@ def create_pdf_url(district: str, ac: int, part_number: int) -> str:
     return url
 
 
-def download_pdf_file(url: str, output_path: str, max_retries: int = 3) -> bool:
-    """Download single PDF with retry logic"""
+def download_pdf_file(url: str, file_path: str, max_retries: int = 3) -> bool:
+    """Download single PDF with retry logic and save to storage"""
     for attempt in range(max_retries):
         try:
             response = requests.get(url, timeout=60, verify=True)
             response.raise_for_status()
             
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-            with open(output_path, 'wb') as f:
-                f.write(response.content)
-            
-            if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+            # Save to storage (S3 or local)
+            if storage.save_file(file_path, response.content):
                 return True
             
-            if os.path.exists(output_path):
-                os.remove(output_path)
+            if storage.file_exists(file_path) and storage.get_file_size(file_path) > 0:
+                return True
                 
         except requests.exceptions.Timeout:
             if attempt < max_retries - 1:
@@ -181,27 +189,29 @@ def download_pdfs_in_range(start_part: int, end_part: int) -> None:
     download_state["failed_parts"] = []
     download_state["total_parts"] = end_part - start_part + 1
     
-    os.makedirs(PDF_DIR, exist_ok=True)
-    
     for part in range(start_part, end_part + 1):
         download_state["current_part"] = part
         
         try:
             filename = get_pdf_filename(AC_NUMBER, part)
-            pdf_path = os.path.join(PDF_DIR, filename)
+            file_path = f"pdfs/{filename}"  # S3 key format (works for local too)
             
             # Skip if already exists
-            if os.path.exists(pdf_path) and os.path.getsize(pdf_path) > 0:
+            if storage.file_exists(file_path) and storage.get_file_size(file_path) > 0:
                 download_state["completed_parts"].append(part)
+                print(f"✓ Part {part} already exists")
                 continue
             
             # Download
             url = create_pdf_url(DISTRICT, AC_NUMBER, part)
+            print(f"⬇ Downloading Part {part}...")
             
-            if download_pdf_file(url, pdf_path):
+            if download_pdf_file(url, file_path):
                 download_state["completed_parts"].append(part)
+                print(f"✓ Part {part} downloaded")
             else:
                 download_state["failed_parts"].append(part)
+                print(f"✗ Part {part} failed")
         
         except Exception as e:
             print(f"Error processing part {part}: {str(e)}")
@@ -211,6 +221,9 @@ def download_pdfs_in_range(start_part: int, end_part: int) -> None:
     
     download_state["in_progress"] = False
     download_state["status"] = "idle"
+    print(f"\n{'='*60}")
+    print(f"Download complete! Completed: {len(download_state['completed_parts'])}, Failed: {len(download_state['failed_parts'])}")
+    print(f"{'='*60}")
 
 
 # ============================================================================
@@ -227,21 +240,26 @@ def health():
 def list_pdfs():
     """List all downloaded PDFs"""
     try:
-        os.makedirs(PDF_DIR, exist_ok=True)
         pdfs = []
+        pdf_files = storage.list_files(prefix="pdfs/")
         
-        if os.path.exists(PDF_DIR):
-            for filename in sorted(os.listdir(PDF_DIR)):
-                if filename.endswith('.pdf'):
-                    filepath = os.path.join(PDF_DIR, filename)
-                    size_mb = os.path.getsize(filepath) / (1024 * 1024)
-                    # Extract part number from filename (e.g., A0880278.pdf -> 278)
-                    part_num = int(filename[5:8]) if len(filename) >= 8 else 0
-                    pdfs.append({
-                        "filename": filename,
-                        "part_number": part_num,
-                        "size_mb": round(size_mb, 2)
-                    })
+        for filename in pdf_files:
+            try:
+                file_path = f"pdfs/{filename}"
+                size_bytes = storage.get_file_size(file_path)
+                size_mb = size_bytes / (1024 * 1024)
+                
+                # Extract part number from filename (e.g., A0880278.pdf -> 278)
+                part_num = int(filename[5:8]) if len(filename) >= 8 else 0
+                
+                pdfs.append({
+                    "filename": filename,
+                    "part_number": part_num,
+                    "size_mb": round(size_mb, 2)
+                })
+            except Exception as e:
+                print(f"Error processing file {filename}: {str(e)}")
+                continue
         
         return jsonify({"success": True, "pdfs": pdfs, "total": len(pdfs)})
     
@@ -305,6 +323,7 @@ def download_status():
 @app.route('/api/search', methods=['POST'])
 def search():
     """Search across specified PDFs"""
+    import tempfile
     try:
         data = request.json
         query = data.get('query', '').strip()
@@ -326,14 +345,22 @@ def search():
         total_matches = 0
         
         for part_num in part_numbers:
+            temp_path = None
             try:
                 filename = get_pdf_filename(AC_NUMBER, part_num)
-                pdf_path = os.path.join(PDF_DIR, filename)
+                file_path = f"pdfs/{filename}"
                 
-                if not os.path.exists(pdf_path):
+                # Load PDF from storage
+                pdf_content = storage.load_file(file_path)
+                if not pdf_content:
                     continue
                 
-                matches = search_in_pdf(pdf_path, query)
+                # Write to temp file for pdfplumber (it needs a file path)
+                with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp:
+                    tmp.write(pdf_content)
+                    temp_path = tmp.name
+                
+                matches = search_in_pdf(temp_path, query)
                 
                 if matches:
                     results[f"Part {part_num}"] = {
@@ -347,6 +374,13 @@ def search():
             except Exception as e:
                 print(f"Error searching part {part_num}: {str(e)}")
                 continue
+            finally:
+                # Clean up temp file
+                if temp_path and os.path.exists(temp_path):
+                    try:
+                        os.remove(temp_path)
+                    except:
+                        pass
         
         return jsonify({
             "success": True,
@@ -363,6 +397,7 @@ def search():
 @app.route('/api/search/single', methods=['POST'])
 def search_single():
     """Search in a single PDF and return paginated results"""
+    import tempfile
     try:
         data = request.json
         query = data.get('query', '').strip()
@@ -377,32 +412,48 @@ def search_single():
             }), 400
         
         filename = get_pdf_filename(AC_NUMBER, part_number)
-        pdf_path = os.path.join(PDF_DIR, filename)
+        file_path = f"pdfs/{filename}"
         
-        if not os.path.exists(pdf_path):
+        # Load PDF from storage
+        pdf_content = storage.load_file(file_path)
+        if not pdf_content:
             return jsonify({
                 "success": False,
                 "error": f"PDF Part {part_number} not found"
             }), 404
         
-        matches = search_in_pdf(pdf_path, query)
-        
-        # Paginate results
-        total_matches = len(matches)
-        start_idx = (page - 1) * per_page
-        end_idx = start_idx + per_page
-        paginated_matches = matches[start_idx:end_idx]
-        
-        return jsonify({
-            "success": True,
-            "query": query,
-            "part_number": part_number,
-            "total_matches": total_matches,
-            "page": page,
-            "per_page": per_page,
-            "total_pages": (total_matches + per_page - 1) // per_page,
-            "matches": paginated_matches
-        })
+        # Write to temp file for pdfplumber
+        temp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp:
+                tmp.write(pdf_content)
+                temp_path = tmp.name
+            
+            matches = search_in_pdf(temp_path, query)
+            
+            # Paginate results
+            total_matches = len(matches)
+            start_idx = (page - 1) * per_page
+            end_idx = start_idx + per_page
+            paginated_matches = matches[start_idx:end_idx]
+            
+            return jsonify({
+                "success": True,
+                "query": query,
+                "part_number": part_number,
+                "total_matches": total_matches,
+                "page": page,
+                "per_page": per_page,
+                "total_pages": (total_matches + per_page - 1) // per_page,
+                "matches": paginated_matches
+            })
+        finally:
+            # Clean up temp file
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except:
+                    pass
     
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
