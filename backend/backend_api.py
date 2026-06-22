@@ -33,26 +33,29 @@ except Exception as e:
 # Configuration
 app = Flask(__name__)
 
-# CORS configuration - works for both local and production (Render)
-_frontend_url = os.getenv('FRONTEND_URL', '*')
+# CORS configuration - dynamic origin matching for local + production
+def cors_origin_matcher(origin):
+    """Allow localhost ports + production URLs"""
+    if not origin:
+        return False
+    # Allow all localhost variants (3000, 5173, etc for local dev)
+    if origin.startswith('http://localhost:') or origin.startswith('http://127.0.0.1:'):
+        return True
+    # Allow production Vercel frontend
+    if 'vercel.app' in origin:
+        return True
+    # Allow specific production URLs from env
+    allowed = os.getenv('FRONTEND_URL', '').split(',')
+    return any(origin.strip() == url.strip() for url in allowed if url.strip())
+
 cors_config = {
-    "origins": _frontend_url.split(',') if _frontend_url != '*' else '*',
+    "origins": cors_origin_matcher,
     "methods": ["GET", "POST", "OPTIONS", "DELETE", "PUT"],
     "allow_headers": ["Content-Type", "Authorization"],
     "supports_credentials": True,
     "max_age": 3600
 }
 CORS(app, resources={r"/api/*": cors_config})
-
-# Add after_request handler for additional headers
-@app.after_request
-def add_cors_headers(response):
-    response.headers['Access-Control-Allow-Origin'] = _frontend_url if _frontend_url != '*' else '*'
-    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS, DELETE, PUT'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
-    response.headers['Access-Control-Max-Age'] = '3600'
-    response.headers['Access-Control-Allow-Credentials'] = 'true'
-    return response
 
 DISTRICT = os.getenv('DISTRICT', 'BANGALORE URBAN')
 AC_NUMBER = int(os.getenv('AC_NUMBER', '88'))
