@@ -230,12 +230,30 @@ export default function PDFManager({ onDownloadComplete }) {
             </label>
           </div>
 
-          {/* Range Input */}
+          {/* Range Input with Slider */}
           {downloadMode === 'range' && (
             <div className="input-group">
-              <div className="input-row">
-                <div className="form-group">
-                  <label>Start Part Number</label>
+              <div className="range-info">
+                <h4>Select PDF Range</h4>
+                <p className="range-display">📋 PDF #{startPart} to PDF #{endPart} ({Math.max(0, parseInt(endPart) - parseInt(startPart) + 1)} PDFs)</p>
+              </div>
+              
+              {/* Visual Range Slider */}
+              <div className="range-slider-container">
+                <div className="slider-group">
+                  <label>Start (PDF #)</label>
+                  <input
+                    type="range"
+                    min="1"
+                    max="527"
+                    value={startPart}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value)
+                      if (val <= parseInt(endPart)) setStartPart(val)
+                    }}
+                    disabled={downloading}
+                    className="range-slider"
+                  />
                   <input
                     type="number"
                     min="1"
@@ -243,11 +261,24 @@ export default function PDFManager({ onDownloadComplete }) {
                     value={startPart}
                     onChange={(e) => setStartPart(e.target.value)}
                     disabled={downloading}
-                    placeholder="1"
+                    className="range-input"
                   />
                 </div>
-                <div className="form-group">
-                  <label>End Part Number</label>
+                
+                <div className="slider-group">
+                  <label>End (PDF #)</label>
+                  <input
+                    type="range"
+                    min="1"
+                    max="527"
+                    value={endPart}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value)
+                      if (val >= parseInt(startPart)) setEndPart(val)
+                    }}
+                    disabled={downloading}
+                    className="range-slider"
+                  />
                   <input
                     type="number"
                     min="1"
@@ -255,39 +286,18 @@ export default function PDFManager({ onDownloadComplete }) {
                     value={endPart}
                     onChange={(e) => setEndPart(e.target.value)}
                     disabled={downloading}
-                    placeholder="10"
+                    className="range-input"
                   />
                 </div>
               </div>
-              <div className="preset-buttons">
-                <button
-                  onClick={() => { setStartPart(1); setEndPart(10) }}
-                  disabled={downloading}
-                  className="preset-btn"
-                >
-                  1-10
-                </button>
-                <button
-                  onClick={() => { setStartPart(1); setEndPart(50) }}
-                  disabled={downloading}
-                  className="preset-btn"
-                >
-                  1-50
-                </button>
-                <button
-                  onClick={() => { setStartPart(1); setEndPart(100) }}
-                  disabled={downloading}
-                  className="preset-btn"
-                >
-                  1-100
-                </button>
-                <button
-                  onClick={() => { setStartPart(278); setEndPart(278) }}
-                  disabled={downloading}
-                  className="preset-btn"
-                >
-                  Only 278
-                </button>
+
+              {/* Quick Presets */}
+              <div className="quick-presets">
+                <p className="preset-label">Quick Select:</p>
+                <button onClick={() => { setStartPart(1); setEndPart(100) }} className="preset-btn" disabled={downloading}>1-100</button>
+                <button onClick={() => { setStartPart(1); setEndPart(200) }} className="preset-btn" disabled={downloading}>1-200</button>
+                <button onClick={() => { setStartPart(1); setEndPart(527) }} className="preset-btn" disabled={downloading}>All (1-527)</button>
+                <button onClick={() => { setStartPart(300); setEndPart(400) }} className="preset-btn" disabled={downloading}>300-400</button>
               </div>
             </div>
           )}

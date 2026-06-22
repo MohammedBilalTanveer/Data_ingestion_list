@@ -50,20 +50,20 @@ export default function Auth({ onLoginSuccess }) {
   return (
     <div className="auth-container">
       <div className="auth-card">
-        <h2>🔐 Login Required</h2>
+        <h2>🔐 Authentication Required</h2>
         <p className="auth-description">
-          Please authenticate to download PDFs
+          Sign in with your credentials to download PDFs
         </p>
 
         {error && <div className="auth-error">{error}</div>}
 
         <form onSubmit={handleSubmit}>
           <div className="form-group">
-            <label htmlFor="username">Username</label>
+            <label htmlFor="username">Email</label>
             <input
               id="username"
               type="email"
-              placeholder="admin123@gmail.com"
+              placeholder="your-email@example.com"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               disabled={loading}
@@ -77,7 +77,7 @@ export default function Auth({ onLoginSuccess }) {
               <input
                 id="password"
                 type={showPassword ? 'text' : 'password'}
-                placeholder="Enter password"
+                placeholder="••••••••"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 disabled={loading}

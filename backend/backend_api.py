@@ -92,11 +92,18 @@ download_state = {
     "cancel_requested": False
 }
 
-# Hardcoded credentials for download authentication (no DB needed)
-VALID_CREDENTIALS = {
-    "username": "admin123@gmail.com",
-    "password": "admin123@!"
-}
+# Credentials from environment variables - NO HARDCODED SECRETS
+# Set via environment variables: DOWNLOAD_USERNAME, DOWNLOAD_PASSWORD
+# Defaults to empty (will reject all logins if not set)
+DOWNLOAD_USERNAME = os.getenv('DOWNLOAD_USERNAME', '')
+DOWNLOAD_PASSWORD = os.getenv('DOWNLOAD_PASSWORD', '')
+
+# Flag to enable/disable authentication
+AUTH_ENABLED = bool(DOWNLOAD_USERNAME and DOWNLOAD_PASSWORD)
+
+if not AUTH_ENABLED:
+    print("⚠️  WARNING: Authentication disabled - no DOWNLOAD_USERNAME/PASSWORD set")
+    print("    Set environment variables to enable login")
 
 
 # ============================================================================
@@ -299,9 +306,16 @@ def authenticate():
                 "error": "Username and password required"
             }), 400
         
+        # Check if auth is enabled
+        if not AUTH_ENABLED:
+            return jsonify({
+                "success": False,
+                "error": "Authentication not configured"
+            }), 503
+        
         # Check credentials
-        if (username == VALID_CREDENTIALS["username"] and 
-            password == VALID_CREDENTIALS["password"]):
+        if (username == DOWNLOAD_USERNAME and 
+            password == DOWNLOAD_PASSWORD):
             return jsonify({
                 "success": True,
                 "token": "authenticated",
@@ -367,6 +381,60 @@ def list_pdfs():
             "page": page,
             "per_page": per_page,
             "total_pages": total_pages
+        })
+    
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/pdfs/range', methods=['GET'])
+def get_pdfs_by_range():
+    """Get PDFs by part number range for efficient selection"""
+    try:
+        start = int(request.args.get('start', 1))
+        end = int(request.args.get('end', 50))
+        
+        # Validate range
+        if start < 1:
+            start = 1
+        if end < start:
+            end = start + 49
+        if end - start > 200:  # Max 200 PDFs at once
+            end = start + 199
+        
+        pdfs = []
+        pdf_files = storage.list_files(prefix="pdfs/")
+        
+        for filename in pdf_files:
+            try:
+                file_path = f"pdfs/{filename}"
+                size_bytes = storage.get_file_size(file_path)
+                size_mb = size_bytes / (1024 * 1024)
+                
+                # Extract part number from filename (e.g., A0880278.pdf -> 278)
+                part_num = int(filename[5:8]) if len(filename) >= 8 else 0
+                
+                # Filter by range
+                if start <= part_num <= end:
+                    pdfs.append({
+                        "filename": filename,
+                        "part_number": part_num,
+                        "size_mb": round(size_mb, 2),
+                        "selected": False
+                    })
+            except Exception as e:
+                print(f"Error processing file {filename}: {str(e)}")
+                continue
+        
+        # Sort by part number
+        pdfs.sort(key=lambda x: x['part_number'])
+        
+        return jsonify({
+            "success": True,
+            "pdfs": pdfs,
+            "total": len(pdfs),
+            "range": {"start": start, "end": end},
+            "message": f"PDFs from {start} to {end}"
         })
     
     except Exception as e:
