@@ -11,23 +11,43 @@ export default function SearchInterface({ refreshTrigger }) {
   const [error, setError] = useState('')
   const [currentPage, setCurrentPage] = useState({})
   const [loading, setLoading] = useState(true)
+  const [pdfPage, setPdfPage] = useState(1)
+  const [itemsPerPage] = useState(30)
+  const [totalPages, setTotalPages] = useState(1)
+  const [pdfFilterQuery, setPdfFilterQuery] = useState('')
+  const [filteredPdfs, setFilteredPdfs] = useState([])
 
   // Load PDFs on mount and when refreshTrigger changes
   useEffect(() => {
     loadPDFs()
-  }, [refreshTrigger])
+  }, [refreshTrigger, pdfPage])
+
+  // Filter PDFs based on search query
+  useEffect(() => {
+    if (pdfFilterQuery.trim() === '') {
+      setFilteredPdfs(pdfs)
+    } else {
+      const query = pdfFilterQuery.toLowerCase()
+      const filtered = pdfs.filter(pdf => 
+        pdf.part_number.toString().includes(query) ||
+        pdf.filename.toLowerCase().includes(query)
+      )
+      setFilteredPdfs(filtered)
+    }
+  }, [pdfFilterQuery, pdfs])
 
   const loadPDFs = async () => {
     try {
       setLoading(true)
-      const response = await fetch(`${API_URL}/api/pdfs/list`)
+      const response = await fetch(`${API_URL}/api/pdfs/list?page=${pdfPage}&per_page=${itemsPerPage}`)
       const data = await response.json()
 
       if (data.success) {
         const pdfList = data.pdfs || []
         setPdfs(pdfList)
+        setTotalPages(data.total_pages || 1)
 
-        // Pre-select PDF 278 if available
+        // Pre-select PDF 278 if available on current page
         if (pdfList.some(p => p.part_number === 278)) {
           setSelectedParts([278])
         }
@@ -52,10 +72,10 @@ export default function SearchInterface({ refreshTrigger }) {
   }
 
   const handleSelectAll = () => {
-    if (selectedParts.length === pdfs.length) {
+    if (selectedParts.length === filteredPdfs.length && filteredPdfs.length > 0) {
       setSelectedParts([])
     } else {
-      setSelectedParts(pdfs.map(p => p.part_number))
+      setSelectedParts(filteredPdfs.map(p => p.part_number))
     }
     setCurrentPage({})
   }
@@ -136,41 +156,88 @@ export default function SearchInterface({ refreshTrigger }) {
         {/* PDF Selection */}
         <div className="pdf-selection">
           <div className="selection-header">
-            <h3>Select PDFs to Search</h3>
+            <h3>Select PDFs to Search (Total: {pdfs.length})</h3>
             <button 
               onClick={handleSelectAll}
               className="select-all-btn"
-              disabled={loading || pdfs.length === 0}
+              disabled={loading || filteredPdfs.length === 0}
             >
-              {selectedParts.length === pdfs.length && pdfs.length > 0 ? 'Deselect All' : 'Select All'}
+              {selectedParts.length === filteredPdfs.length && filteredPdfs.length > 0 ? 'Deselect Filtered' : 'Select Filtered'}
             </button>
           </div>
 
+          {/* PDF Filter Input */}
+          {pdfs.length > 0 && (
+            <div className="pdf-filter-section">
+              <input
+                type="text"
+                placeholder="🔍 Filter by part number or filename (e.g., 278 or A088)"
+                value={pdfFilterQuery}
+                onChange={(e) => setPdfFilterQuery(e.target.value)}
+                className="pdf-filter-input"
+                disabled={loading}
+              />
+              {pdfFilterQuery && (
+                <span className="filter-result-count">
+                  {filteredPdfs.length} of {pdfs.length} PDF(s)
+                </span>
+              )}
+            </div>
+          )}
+
           {loading ? (
-            <p className="loading">Loading PDFs...</p>
+            <p className="loading">🔄 Loading PDFs...</p>
           ) : pdfs.length === 0 ? (
             <div className="no-pdfs-message">
               <p>📥 No PDFs downloaded yet</p>
               <small>Go to "Download PDFs" tab to download PDFs first</small>
             </div>
-          ) : (
-            <div className="pdf-checkboxes">
-              {pdfs.map((pdf) => (
-                <label key={pdf.part_number} className="pdf-checkbox-label">
-                  <input
-                    type="checkbox"
-                    checked={selectedParts.includes(pdf.part_number)}
-                    onChange={() => handlePartToggle(pdf.part_number)}
-                    className="pdf-checkbox"
-                  />
-                  <span className="checkbox-custom"></span>
-                  <span className="pdf-info">
-                    <span className="pdf-part">Part {pdf.part_number}</span>
-                    <span className="pdf-size">{pdf.size_mb} MB</span>
-                  </span>
-                </label>
-              ))}
+          ) : filteredPdfs.length === 0 ? (
+            <div className="no-pdfs-message">
+              <p>❌ No PDFs match your filter</p>
+              <small>Try a different search term</small>
             </div>
+          ) : (
+            <>
+              <div className="pdf-checkboxes">
+                {filteredPdfs.map((pdf) => (
+                  <label key={pdf.part_number} className="pdf-checkbox-label">
+                    <input
+                      type="checkbox"
+                      checked={selectedParts.includes(pdf.part_number)}
+                      onChange={() => handlePartToggle(pdf.part_number)}
+                      className="pdf-checkbox"
+                    />
+                    <span className="checkbox-custom"></span>
+                    <span className="pdf-info">
+                      <span className="pdf-part">Part {pdf.part_number}</span>
+                      <span className="pdf-size">{pdf.size_mb} MB</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+              
+              {/* Pagination Controls */}
+              <div className="pagination-controls">
+                <button
+                  onClick={() => setPdfPage(p => Math.max(1, p - 1))}
+                  disabled={pdfPage === 1}
+                  className="page-btn"
+                >
+                  ← Previous
+                </button>
+                <span className="page-info">
+                  Page {pdfPage} of {totalPages}
+                </span>
+                <button
+                  onClick={() => setPdfPage(p => Math.min(totalPages, p + 1))}
+                  disabled={pdfPage >= totalPages}
+                  className="page-btn"
+                >
+                  Next →
+                </button>
+              </div>
+            </>
           )}
         </div>
 

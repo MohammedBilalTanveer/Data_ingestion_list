@@ -115,6 +115,47 @@
   cursor: not-allowed;
 }
 
+.pdf-filter-section {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 16px;
+  background: white;
+  padding: 12px;
+  border-radius: 6px;
+}
+
+.pdf-filter-input {
+  flex: 1;
+  padding: 10px 14px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  font-size: 14px;
+  font-family: inherit;
+  transition: all 0.3s;
+}
+
+.pdf-filter-input:focus {
+  outline: none;
+  border-color: #667eea;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+.pdf-filter-input::placeholder {
+  color: #999;
+}
+
+.filter-result-count {
+  display: inline-block;
+  padding: 6px 12px;
+  background: #e8eef5;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #667eea;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .loading {
   text-align: center;
   color: #999;
@@ -495,6 +536,50 @@
 .load-more-btn:hover {
   color: #764ba2;
   transform: translateY(-2px);
+}
+
+/* Pagination Controls */
+.pagination-controls {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+  margin-top: 20px;
+  padding: 16px;
+  background: linear-gradient(135deg, #667eea08 0%, #764ba208 100%);
+  border-radius: 8px;
+  border: 1px solid #e8eef5;
+}
+
+.page-btn {
+  padding: 10px 16px;
+  background: white;
+  border: 1px solid #e8eef5;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-weight: 600;
+  color: #667eea;
+}
+
+.page-btn:hover:not(:disabled) {
+  background: #667eea;
+  color: white;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+}
+
+.page-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  color: #ccc;
+}
+
+.page-info {
+  color: #667eea;
+  font-weight: 600;
+  min-width: 120px;
+  text-align: center;
 }
 
 @media (max-width: 768px) {

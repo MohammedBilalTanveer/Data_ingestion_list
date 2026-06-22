@@ -262,13 +262,21 @@
 /* PDFs List */
 .pdfs-list {
   border-top: 1px solid #eee;
+  margin-top: 32px;
+  padding-top: 24px;
 }
 
-.pdfs-list h3 {
-  margin-top: 0;
+.pdfs-list-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.pdfs-list-header h3 {
+  margin: 0;
   color: #333;
   font-size: 18px;
-  margin-bottom: 16px;
 }
 
 .loading {
@@ -326,9 +334,141 @@
   color: #999;
 }
 
+/* Manager Header */
+.manager-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.manager-header h2 {
+  margin: 0;
+}
+
+.logout-btn {
+  padding: 8px 12px;
+  background: #ff4757;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.logout-btn:hover {
+  background: #ff3838;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(255, 71, 87, 0.3);
+}
+
+/* Button Group */
+.button-group {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.button-group .download-btn {
+  flex: 1;
+  margin: 0;
+}
+
+.cancel-btn {
+  padding: 16px;
+  background: #ff4757;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 1.125rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  box-shadow: 0 4px 12px rgba(255, 71, 87, 0.2);
+}
+
+.cancel-btn:hover {
+  background: #ff3838;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(255, 71, 87, 0.3);
+}
+
+/* Progress Status */
+.progress-status {
+  margin-top: 12px;
+  text-align: center;
+  color: #666;
+  font-weight: 600;
+}
+
+.progress-status strong {
+  color: #667eea;
+}
+
+/* Pagination */
+.pagination {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid #eee;
+}
+
+.pagination-btn {
+  padding: 8px 16px;
+  background: #f0f0f0;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-weight: 500;
+  color: #666;
+}
+
+.pagination-btn:hover:not(:disabled) {
+  background: #667eea;
+  color: white;
+  border-color: #667eea;
+  transform: translateY(-2px);
+}
+
+.pagination-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.pagination-info {
+  color: #666;
+  font-weight: 600;
+}
+
+/* Loading Skeleton */
+.loading-skeleton {
+  padding: 30px;
+  text-align: center;
+  color: #999;
+}
+
+.loading-skeleton p {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 1rem;
+  animation: pulse 1.5s infinite;
+}
+
 @media (max-width: 768px) {
   .manager-card {
     padding: 20px;
+  }
+
+  .manager-header {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .input-row {
@@ -349,5 +489,18 @@
 
   .mode-selector {
     flex-direction: column;
+  }
+
+  .button-group {
+    flex-direction: column;
+  }
+
+  .pagination {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .pagination-btn {
+    width: 100%;
   }
 }

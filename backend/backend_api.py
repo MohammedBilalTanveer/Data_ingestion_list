@@ -33,12 +33,26 @@ except Exception as e:
 # Configuration
 app = Flask(__name__)
 
-# Restrict CORS to the deployed frontend URL in production; allow all in dev
-_frontend_url = os.getenv('FRONTEND_URL')
-if _frontend_url:
-    CORS(app, origins=_frontend_url.split(','))
-else:
-    CORS(app)
+# CORS configuration - works for both local and production (Render)
+_frontend_url = os.getenv('FRONTEND_URL', '*')
+cors_config = {
+    "origins": _frontend_url.split(',') if _frontend_url != '*' else '*',
+    "methods": ["GET", "POST", "OPTIONS", "DELETE", "PUT"],
+    "allow_headers": ["Content-Type", "Authorization"],
+    "supports_credentials": True,
+    "max_age": 3600
+}
+CORS(app, resources={r"/api/*": cors_config})
+
+# Add after_request handler for additional headers
+@app.after_request
+def add_cors_headers(response):
+    response.headers['Access-Control-Allow-Origin'] = _frontend_url if _frontend_url != '*' else '*'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS, DELETE, PUT'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+    response.headers['Access-Control-Max-Age'] = '3600'
+    response.headers['Access-Control-Allow-Credentials'] = 'true'
+    return response
 
 DISTRICT = os.getenv('DISTRICT', 'BANGALORE URBAN')
 AC_NUMBER = int(os.getenv('AC_NUMBER', '88'))
@@ -54,7 +68,14 @@ download_state = {
     "total_parts": 0,
     "completed_parts": [],
     "failed_parts": [],
-    "status": "idle"
+    "status": "idle",
+    "cancel_requested": False
+}
+
+# Hardcoded credentials for download authentication (no DB needed)
+VALID_CREDENTIALS = {
+    "username": "admin123@gmail.com",
+    "password": "admin123@!"
 }
 
 
@@ -185,11 +206,18 @@ def download_pdfs_in_range(start_part: int, end_part: int) -> None:
     
     download_state["in_progress"] = True
     download_state["status"] = "downloading"
+    download_state["cancel_requested"] = False
     download_state["completed_parts"] = []
     download_state["failed_parts"] = []
     download_state["total_parts"] = end_part - start_part + 1
     
     for part in range(start_part, end_part + 1):
+        # Check if cancel was requested
+        if download_state["cancel_requested"]:
+            download_state["status"] = "cancelled"
+            print(f"✗ Download cancelled at part {part}")
+            break
+        
         download_state["current_part"] = part
         
         try:
@@ -220,9 +248,10 @@ def download_pdfs_in_range(start_part: int, end_part: int) -> None:
         time.sleep(0.5)  # Small delay between downloads
     
     download_state["in_progress"] = False
-    download_state["status"] = "idle"
+    if download_state["status"] != "cancelled":
+        download_state["status"] = "idle"
     print(f"\n{'='*60}")
-    print(f"Download complete! Completed: {len(download_state['completed_parts'])}, Failed: {len(download_state['failed_parts'])}")
+    print(f"Completed: {len(download_state['completed_parts'])}, Failed: {len(download_state['failed_parts'])}")
     print(f"{'='*60}")
 
 
@@ -236,10 +265,50 @@ def health():
     return jsonify({"status": "ok", "message": "Backend API is running"})
 
 
+@app.route('/api/auth', methods=['POST'])
+def authenticate():
+    """Authenticate user for download access"""
+    try:
+        data = request.json
+        username = data.get('username', '').strip()
+        password = data.get('password', '').strip()
+        
+        if not username or not password:
+            return jsonify({
+                "success": False,
+                "error": "Username and password required"
+            }), 400
+        
+        # Check credentials
+        if (username == VALID_CREDENTIALS["username"] and 
+            password == VALID_CREDENTIALS["password"]):
+            return jsonify({
+                "success": True,
+                "token": "authenticated",
+                "message": "Login successful"
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "error": "Invalid credentials"
+            }), 401
+    
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route('/api/pdfs/list', methods=['GET'])
 def list_pdfs():
-    """List all downloaded PDFs"""
+    """List all downloaded PDFs with pagination"""
     try:
+        page = int(request.args.get('page', 1))
+        per_page = int(request.args.get('per_page', 50))
+        
+        if page < 1:
+            page = 1
+        if per_page < 1 or per_page > 100:
+            per_page = 50
+        
         pdfs = []
         pdf_files = storage.list_files(prefix="pdfs/")
         
@@ -261,7 +330,24 @@ def list_pdfs():
                 print(f"Error processing file {filename}: {str(e)}")
                 continue
         
-        return jsonify({"success": True, "pdfs": pdfs, "total": len(pdfs)})
+        # Sort by part number
+        pdfs.sort(key=lambda x: x['part_number'])
+        
+        # Paginate
+        total_items = len(pdfs)
+        total_pages = (total_items + per_page - 1) // per_page
+        start_idx = (page - 1) * per_page
+        end_idx = start_idx + per_page
+        paginated_pdfs = pdfs[start_idx:end_idx]
+        
+        return jsonify({
+            "success": True,
+            "pdfs": paginated_pdfs,
+            "total": total_items,
+            "page": page,
+            "per_page": per_page,
+            "total_pages": total_pages
+        })
     
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
@@ -269,9 +355,18 @@ def list_pdfs():
 
 @app.route('/api/pdfs/download', methods=['POST'])
 def download_pdfs():
-    """Start downloading PDFs in range"""
+    """Start downloading PDFs in range (requires authentication)"""
     try:
         data = request.json
+        
+        # Check authentication
+        token = data.get('token')
+        if token != "authenticated":
+            return jsonify({
+                "success": False,
+                "error": "Authentication required. Please login first."
+            }), 401
+        
         start_part = int(data.get('start_part', 1))
         end_part = int(data.get('end_part', 10))
         
@@ -307,6 +402,28 @@ def download_pdfs():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@app.route('/api/downloads/cancel', methods=['POST'])
+def cancel_download():
+    """Cancel ongoing download"""
+    try:
+        if not download_state["in_progress"]:
+            return jsonify({
+                "success": False,
+                "error": "No download in progress"
+            }), 400
+        
+        download_state["cancel_requested"] = True
+        return jsonify({
+            "success": True,
+            "message": "Download cancellation requested",
+            "completed_parts": len(download_state["completed_parts"]),
+            "failed_parts": len(download_state["failed_parts"])
+        })
+    
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route('/api/downloads/status', methods=['GET'])
 def download_status():
     """Get current download status"""
@@ -316,7 +433,8 @@ def download_status():
         "total_parts": download_state["total_parts"],
         "completed_parts": len(download_state["completed_parts"]),
         "failed_parts": len(download_state["failed_parts"]),
-        "status": download_state["status"]
+        "status": download_state["status"],
+        "cancel_requested": download_state["cancel_requested"]
     })
 
 
