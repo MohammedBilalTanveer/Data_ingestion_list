@@ -25,37 +25,54 @@ from storage import get_storage_backend
 # Initialize storage backend (S3 or local)
 try:
     storage = get_storage_backend()
-    print(f"✓ Storage initialized: {storage.__class__.__name__}")
+    print(f"[OK] Storage initialized: {storage.__class__.__name__}")
 except Exception as e:
-    print(f"✗ Storage error: {str(e)}")
+    print(f"[ERROR] Storage error: {str(e)}")
     raise
 
 # Configuration
 app = Flask(__name__)
 
-# CORS configuration - dynamic origin matching for local + production
-def cors_origin_matcher(origin):
-    """Allow localhost ports + production URLs"""
-    if not origin:
-        return False
-    # Allow all localhost variants (3000, 5173, etc for local dev)
-    if origin.startswith('http://localhost:') or origin.startswith('http://127.0.0.1:'):
-        return True
-    # Allow production Vercel frontend
-    if 'vercel.app' in origin:
-        return True
-    # Allow specific production URLs from env
-    allowed = os.getenv('FRONTEND_URL', '').split(',')
-    return any(origin.strip() == url.strip() for url in allowed if url.strip())
+# Simpler CORS configuration for local development
+# For local dev (localhost), allow all origins
+# For production, set FRONTEND_URL environment variable
+if os.getenv('FRONTEND_URL'):
+    # Production mode - use specific URLs
+    allowed_origins = os.getenv('FRONTEND_URL', '').split(',')
+    CORS(app, resources={r"/api/*": {
+        "origins": allowed_origins,
+        "methods": ["GET", "POST", "OPTIONS", "DELETE", "PUT"],
+        "allow_headers": ["Content-Type", "Authorization"],
+        "supports_credentials": True,
+        "max_age": 3600
+    }})
+else:
+    # Local development - allow all
+    CORS(app, resources={r"/api/*": {
+        "origins": "*",
+        "methods": ["GET", "POST", "OPTIONS", "DELETE", "PUT"],
+        "allow_headers": ["Content-Type", "Authorization"],
+        "max_age": 3600
+    }})
 
-cors_config = {
-    "origins": cors_origin_matcher,
-    "methods": ["GET", "POST", "OPTIONS", "DELETE", "PUT"],
-    "allow_headers": ["Content-Type", "Authorization"],
-    "supports_credentials": True,
-    "max_age": 3600
-}
-CORS(app, resources={r"/api/*": cors_config})
+# Additional manual CORS headers for reliability
+@app.after_request
+def add_cors_headers(response):
+    origin = request.headers.get('Origin', '*')
+    
+    # For local development, allow any origin
+    if 'localhost' in origin or '127.0.0.1' in origin:
+        response.headers['Access-Control-Allow-Origin'] = origin
+    elif os.getenv('FRONTEND_URL') and origin in [u.strip() for u in os.getenv('FRONTEND_URL', '').split(',')]:
+        response.headers['Access-Control-Allow-Origin'] = origin
+    else:
+        response.headers['Access-Control-Allow-Origin'] = '*'
+    
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS, DELETE, PUT'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+    response.headers['Access-Control-Max-Age'] = '3600'
+    response.headers['Access-Control-Allow-Credentials'] = 'true'
+    return response
 
 DISTRICT = os.getenv('DISTRICT', 'BANGALORE URBAN')
 AC_NUMBER = int(os.getenv('AC_NUMBER', '88'))
@@ -218,7 +235,7 @@ def download_pdfs_in_range(start_part: int, end_part: int) -> None:
         # Check if cancel was requested
         if download_state["cancel_requested"]:
             download_state["status"] = "cancelled"
-            print(f"✗ Download cancelled at part {part}")
+            print(f"[CANCELLED] Download cancelled at part {part}")
             break
         
         download_state["current_part"] = part
@@ -230,7 +247,7 @@ def download_pdfs_in_range(start_part: int, end_part: int) -> None:
             # Skip if already exists
             if storage.file_exists(file_path) and storage.get_file_size(file_path) > 0:
                 download_state["completed_parts"].append(part)
-                print(f"✓ Part {part} already exists")
+                print(f"[OK] Part {part} already exists")
                 continue
             
             # Download
@@ -239,10 +256,10 @@ def download_pdfs_in_range(start_part: int, end_part: int) -> None:
             
             if download_pdf_file(url, file_path):
                 download_state["completed_parts"].append(part)
-                print(f"✓ Part {part} downloaded")
+                print(f"[OK] Part {part} downloaded")
             else:
                 download_state["failed_parts"].append(part)
-                print(f"✗ Part {part} failed")
+                print(f"[ERROR] Part {part} failed")
         
         except Exception as e:
             print(f"Error processing part {part}: {str(e)}")

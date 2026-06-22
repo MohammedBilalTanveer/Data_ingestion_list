@@ -145,7 +145,7 @@ class S3Storage(StorageBackend):
             # Test connection
             try:
                 self.s3_client.head_bucket(Bucket=bucket_name)
-                print(f"✓ S3 storage initialized: bucket={bucket_name}, region={region}")
+                print(f"[OK] S3 storage initialized: bucket={bucket_name}, region={region}")
             except self.ClientError as e:
                 error_code = e.response['Error']['Code']
                 if error_code == '404':
@@ -158,7 +158,7 @@ class S3Storage(StorageBackend):
         except ImportError:
             raise Exception("boto3 not installed. Install with: pip install boto3")
         except Exception as e:
-            print(f"✗ S3 Storage Error: {str(e)}")
+            print(f"[ERROR] S3 Storage Error: {str(e)}")
             raise
     
     def save_file(self, file_path: str, file_content: bytes) -> bool:
@@ -169,10 +169,10 @@ class S3Storage(StorageBackend):
                 Key=file_path,
                 Body=file_content
             )
-            print(f"✓ Uploaded to S3: {file_path}")
+            print(f"[OK] Uploaded to S3: {file_path}")
             return True
         except Exception as e:
-            print(f"✗ Error saving file to S3: {str(e)}")
+            print(f"[ERROR] Error saving file to S3: {str(e)}")
             return False
     
     def load_file(self, file_path: str) -> bytes:
@@ -184,10 +184,10 @@ class S3Storage(StorageBackend):
         except self.ClientError as e:
             if e.response['Error']['Code'] == 'NoSuchKey':
                 return None
-            print(f"✗ Error loading file from S3: {str(e)}")
+            print(f"[ERROR] Error loading file from S3: {str(e)}")
             return None
         except Exception as e:
-            print(f"✗ Error loading file from S3: {str(e)}")
+            print(f"[ERROR] Error loading file from S3: {str(e)}")
             return None
     
     def file_exists(self, file_path: str) -> bool:
@@ -226,7 +226,7 @@ class S3Storage(StorageBackend):
             
             return sorted(files)
         except Exception as e:
-            print(f"✗ Error listing S3 files: {str(e)}")
+            print(f"[ERROR] Error listing S3 files: {str(e)}")
             return []
     
     def delete_file(self, file_path: str) -> bool:
@@ -235,7 +235,7 @@ class S3Storage(StorageBackend):
             self.s3_client.delete_object(Bucket=self.bucket_name, Key=file_path)
             return True
         except Exception as e:
-            print(f"✗ Error deleting S3 file: {str(e)}")
+            print(f"[ERROR] Error deleting S3 file: {str(e)}")
             return False
 
 
