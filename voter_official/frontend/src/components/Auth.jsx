@@ -102,12 +102,6 @@ export default function Auth({ onLoginSuccess }) {
             {loading ? 'Authenticating...' : 'Login'}
           </button>
         </form>
-
-        <div className="auth-hint">
-          <p>Demo credentials:</p>
-          <p><strong>Email:</strong> admin123@gmail.com</p>
-          <p><strong>Password:</strong> admin123@!</p>
-        </div>
       </div>
     </div>
   )
