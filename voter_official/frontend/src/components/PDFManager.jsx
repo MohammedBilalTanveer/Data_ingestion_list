@@ -1,108 +1,69 @@
 import { useState, useEffect } from 'react'
 import './PDFManager.css'
 import { API_URL } from '../config'
-import Auth from './Auth'
+import LoginPage from './LoginPage'
 
 export default function PDFManager({ onDownloadComplete }) {
-  const [pdfs, setPdfs] = useState([])
-  const [loading, setLoading] = useState(false)
-  const [downloadMode, setDownloadMode] = useState('range') // 'range' or 'specific'
-  const [startPart, setStartPart] = useState(1)
-  const [endPart, setEndPart] = useState(10)
-  const [specificParts, setSpecificParts] = useState('278')
-  const [downloading, setDownloading] = useState(false)
-  const [downloadProgress, setDownloadProgress] = useState(null)
-  const [error, setError] = useState('')
-  const [success, setSuccess] = useState('')
-  const [isAuthenticated, setIsAuthenticated] = useState(false)
-  const [authToken, setAuthToken] = useState(null)
-  const [currentPage, setCurrentPage] = useState(1)
-  const [itemsPerPage] = useState(20)
-  const [totalPdfs, setTotalPdfs] = useState(0)
-  const [totalPages, setTotalPages] = useState(0)
+  const [authed, setAuthed] = useState(
+    () => sessionStorage.getItem('voter_download_auth') === '1'
+  )
 
-  // Load PDFs on mount
-  useEffect(() => {
-    loadPDFs()
-  }, [currentPage])
-
-  const handleLoginSuccess = (token) => {
-    setAuthToken(token)
-    setIsAuthenticated(true)
-    setError('')
-  }
-
+  const handleLogin  = () => setAuthed(true)
   const handleLogout = () => {
-    setAuthToken(null)
-    setIsAuthenticated(false)
-    setDownloading(false)
-    setDownloadProgress(null)
+    sessionStorage.removeItem('voter_download_auth')
+    setAuthed(false)
   }
 
-  // Poll download status while downloading
+  if (!authed) return <LoginPage onLogin={handleLogin} />
+
+  return <DownloadPanel onDownloadComplete={onDownloadComplete} onLogout={handleLogout} />
+}
+
+/* ── Download panel (shown after login) ─────────────────────────────────────── */
+function DownloadPanel({ onDownloadComplete, onLogout }) {
+  const [pdfs,             setPdfs]             = useState([])
+  const [loading,          setLoading]          = useState(false)
+  const [downloadMode,     setDownloadMode]     = useState('range')
+  const [startPart,        setStartPart]        = useState(1)
+  const [endPart,          setEndPart]          = useState(10)
+  const [specificParts,    setSpecificParts]    = useState('278')
+  const [downloading,      setDownloading]      = useState(false)
+  const [downloadProgress, setDownloadProgress] = useState(null)
+  const [error,            setError]            = useState('')
+  const [success,          setSuccess]          = useState('')
+
+  useEffect(() => { loadPDFs() }, [])
+
+  // Poll status while downloading
   useEffect(() => {
     if (!downloading) return
-
-    const interval = setInterval(async () => {
+    const iv = setInterval(async () => {
       try {
-        const response = await fetch(`${API_URL}/api/downloads/status`)
-        const data = await response.json()
+        const res  = await fetch(`${API_URL}/api/downloads/status`)
+        const data = await res.json()
         setDownloadProgress(data)
-
         if (!data.in_progress) {
           setDownloading(false)
-          if (data.status === 'cancelled') {
-            setSuccess(`✅ Download cancelled. Completed: ${data.completed_parts}, Failed: ${data.failed_parts}`)
-          } else {
-            setSuccess(`✅ Download completed! Completed: ${data.completed_parts}, Failed: ${data.failed_parts}`)
-          }
+          setSuccess('✅ Download complete!')
           loadPDFs()
           onDownloadComplete()
         }
-      } catch (error) {
-        console.error('Error polling download status:', error)
-      }
-    }, 1000)
-
-    return () => clearInterval(interval)
+      } catch { /* network glitch — ignore */ }
+    }, 2000) // poll every 2 s (was 1 s, halved to reduce requests)
+    return () => clearInterval(iv)
   }, [downloading, onDownloadComplete])
 
   const loadPDFs = async () => {
     try {
       setLoading(true)
       setError('')
-      const response = await fetch(`${API_URL}/api/pdfs/list?page=${currentPage}&per_page=${itemsPerPage}`)
-      const data = await response.json()
-
-      if (data.success) {
-        setPdfs(data.pdfs || [])
-        setTotalPdfs(data.total || 0)
-        setTotalPages(data.total_pages || 0)
-      }
-    } catch (error) {
+      const res  = await fetch(`${API_URL}/api/pdfs/list`)
+      const data = await res.json()
+      if (data.success) setPdfs(data.pdfs || [])
+    } catch {
       setError('Failed to load PDF list')
-      console.error(error)
     } finally {
       setLoading(false)
-    }
-  }
-
-  const handleCancelDownload = async () => {
-    try {
-      const response = await fetch(`${API_URL}/api/downloads/cancel`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
-      })
-
-      const data = await response.json()
-
-      if (data.success) {
-        setSuccess(`✓ Cancellation requested. Completed: ${data.completed_parts}`)
-      } else {
-        setError(data.error || 'Failed to cancel download')
-      }
-    } catch (error) {
-      setError('Error cancelling download: ' + error.message)
     }
   }
 
@@ -110,62 +71,33 @@ export default function PDFManager({ onDownloadComplete }) {
     setError('')
     setSuccess('')
 
-    if (!isAuthenticated) {
-      setError('Please login first to download PDFs')
-      return
+    let requestData
+    if (downloadMode === 'range') {
+      const s = parseInt(startPart), e = parseInt(endPart)
+      if (!s || !e || s > e || s < 1 || e > 527) {
+        setError('Part numbers must be between 1–527, start ≤ end')
+        return
+      }
+      requestData = { start_part: s, end_part: e }
+    } else {
+      const parts = specificParts
+        .split(',')
+        .map(p => parseInt(p.trim()))
+        .filter(p => !isNaN(p) && p >= 1 && p <= 527)
+      if (parts.length === 0) {
+        setError('Enter valid part numbers (1–527, comma-separated)')
+        return
+      }
+      requestData = { start_part: Math.min(...parts), end_part: Math.max(...parts) }
     }
 
     try {
-      let partNumbers = []
-
-      if (downloadMode === 'range') {
-        if (!startPart || !endPart) {
-          setError('Please enter valid start and end part numbers')
-          return
-        }
-
-        if (parseInt(startPart) > parseInt(endPart)) {
-          setError('Start part must be less than or equal to end part')
-          return
-        }
-
-        if (parseInt(startPart) < 1 || parseInt(endPart) > 527) {
-          setError('Part numbers must be between 1 and 527')
-          return
-        }
-      } else {
-        // Specific parts mode
-        partNumbers = specificParts
-          .split(',')
-          .map(p => parseInt(p.trim()))
-          .filter(p => !isNaN(p) && p > 0 && p <= 527)
-
-        if (partNumbers.length === 0) {
-          setError('Please enter valid part numbers (1-527)')
-          return
-        }
-      }
-
-      const requestData = downloadMode === 'range'
-        ? {
-            start_part: parseInt(startPart),
-            end_part: parseInt(endPart),
-            token: authToken
-          }
-        : {
-            start_part: Math.min(...partNumbers),
-            end_part: Math.max(...partNumbers),
-            token: authToken
-          }
-
-      const response = await fetch(`${API_URL}/api/pdfs/download`, {
-        method: 'POST',
+      const res  = await fetch(`${API_URL}/api/pdfs/download`, {
+        method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestData)
+        body:    JSON.stringify(requestData)
       })
-
-      const data = await response.json()
-
+      const data = await res.json()
       if (data.success) {
         setDownloading(true)
         setDownloadProgress({
@@ -179,238 +111,151 @@ export default function PDFManager({ onDownloadComplete }) {
       } else {
         setError(data.error || 'Download failed')
       }
-    } catch (error) {
-      setError('Error starting download: ' + error.message)
-      console.error(error)
+    } catch (err) {
+      setError('Error starting download: ' + err.message)
     }
   }
 
+  const progressPct = downloadProgress
+    ? Math.round((downloadProgress.completed_parts / Math.max(downloadProgress.total_parts, 1)) * 100)
+    : 0
+
   return (
-    <>
-      {!isAuthenticated && <Auth onLoginSuccess={handleLoginSuccess} />}
-      
-      <div className="pdf-manager" style={{ opacity: !isAuthenticated ? 0.5 : 1 }}>
-        <div className="manager-card">
-          <div className="manager-header">
-            <h2>📥 Download PDFs</h2>
-            {isAuthenticated && (
-              <button onClick={handleLogout} className="logout-btn" title="Logout">
-                🚪 Logout
-              </button>
-            )}
-          </div>
-          <p className="description">
-            Select PDFs to download and store persistently in AWS S3.
-          </p>
+    <div className="pdf-manager">
+      <div className="manager-card">
+        {/* Header with logout */}
+        <div className="manager-header">
+          <h2>📥 Download PDFs</h2>
+          <button className="logout-btn" onClick={onLogout}>🚪 Logout</button>
+        </div>
 
-          {error && <div className="error-message">{error}</div>}
-          {success && <div className="success-message">{success}</div>}
+        <p className="description">
+          Download voter list PDFs from the Karnataka CEO portal. Parts range from 1 to 527.
+        </p>
 
-          {/* Download Mode Selector */}
-          <div className="mode-selector">
-            <label className="mode-option">
+        {error   && <div className="error-message">{error}</div>}
+        {success && <div className="success-message">{success}</div>}
+
+        {/* Mode selector */}
+        <div className="mode-selector">
+          {['range', 'specific'].map(mode => (
+            <label key={mode} className="mode-option">
               <input
                 type="radio"
-                value="range"
-                checked={downloadMode === 'range'}
-                onChange={(e) => setDownloadMode(e.target.value)}
+                value={mode}
+                checked={downloadMode === mode}
+                onChange={() => setDownloadMode(mode)}
                 disabled={downloading}
               />
-              <span>Download Range</span>
+              <span>{mode === 'range' ? 'Part Range' : 'Specific Parts'}</span>
             </label>
-            <label className="mode-option">
-              <input
-                type="radio"
-                value="specific"
-                checked={downloadMode === 'specific'}
-                onChange={(e) => setDownloadMode(e.target.value)}
-                disabled={downloading}
-              />
-              <span>Specific PDFs</span>
-            </label>
-          </div>
+          ))}
+        </div>
 
-          {/* Range Input with Slider */}
-          {downloadMode === 'range' && (
-            <div className="input-group">
-              <div className="range-info">
-                <h4>Select PDF Range</h4>
-                <p className="range-display">📋 PDF #{startPart} to PDF #{endPart} ({Math.max(0, parseInt(endPart) - parseInt(startPart) + 1)} PDFs)</p>
-              </div>
-              
-              {/* Visual Range Slider */}
-              <div className="range-slider-container">
-                <div className="slider-group">
-                  <label>Start (PDF #)</label>
-                  <input
-                    type="range"
-                    min="1"
-                    max="527"
-                    value={startPart}
-                    onChange={(e) => {
-                      const val = parseInt(e.target.value)
-                      if (val <= parseInt(endPart)) setStartPart(val)
-                    }}
-                    disabled={downloading}
-                    className="range-slider"
-                  />
-                  <input
-                    type="number"
-                    min="1"
-                    max="527"
-                    value={startPart}
-                    onChange={(e) => setStartPart(e.target.value)}
-                    disabled={downloading}
-                    className="range-input"
-                  />
-                </div>
-                
-                <div className="slider-group">
-                  <label>End (PDF #)</label>
-                  <input
-                    type="range"
-                    min="1"
-                    max="527"
-                    value={endPart}
-                    onChange={(e) => {
-                      const val = parseInt(e.target.value)
-                      if (val >= parseInt(startPart)) setEndPart(val)
-                    }}
-                    disabled={downloading}
-                    className="range-slider"
-                  />
-                  <input
-                    type="number"
-                    min="1"
-                    max="527"
-                    value={endPart}
-                    onChange={(e) => setEndPart(e.target.value)}
-                    disabled={downloading}
-                    className="range-input"
-                  />
-                </div>
-              </div>
-
-              {/* Quick Presets */}
-              <div className="quick-presets">
-                <p className="preset-label">Quick Select:</p>
-                <button onClick={() => { setStartPart(1); setEndPart(100) }} className="preset-btn" disabled={downloading}>1-100</button>
-                <button onClick={() => { setStartPart(1); setEndPart(200) }} className="preset-btn" disabled={downloading}>1-200</button>
-                <button onClick={() => { setStartPart(1); setEndPart(527) }} className="preset-btn" disabled={downloading}>All (1-527)</button>
-                <button onClick={() => { setStartPart(300); setEndPart(400) }} className="preset-btn" disabled={downloading}>300-400</button>
-              </div>
-            </div>
-          )}
-
-          {/* Specific Parts Input */}
-          {downloadMode === 'specific' && (
-            <div className="input-group">
+        {/* Range inputs */}
+        {downloadMode === 'range' && (
+          <div className="input-group">
+            <div className="input-row">
               <div className="form-group">
-                <label>Enter Part Numbers (comma-separated)</label>
+                <label>Start Part</label>
                 <input
-                  type="text"
-                  value={specificParts}
-                  onChange={(e) => setSpecificParts(e.target.value)}
+                  type="number" min="1" max="527"
+                  value={startPart}
+                  onChange={e => setStartPart(e.target.value)}
                   disabled={downloading}
-                  placeholder="e.g., 1, 5, 10, 278"
+                  placeholder="1"
                 />
-                <small>Enter 1-527, separated by commas</small>
+              </div>
+              <div className="form-group">
+                <label>End Part</label>
+                <input
+                  type="number" min="1" max="527"
+                  value={endPart}
+                  onChange={e => setEndPart(e.target.value)}
+                  disabled={downloading}
+                  placeholder="10"
+                />
               </div>
             </div>
-          )}
 
-          {/* Download Buttons */}
-          <div className="button-group">
-            <button
-              onClick={handleDownload}
-              disabled={downloading || loading || !isAuthenticated}
-              className={`download-btn ${downloading ? 'downloading' : ''}`}
-            >
-              {downloading ? '⏳ Downloading...' : '⬇️ Start Download'}
-            </button>
-            {downloading && (
-              <button
-                onClick={handleCancelDownload}
-                className="cancel-btn"
-              >
-                ❌ Cancel Download
-              </button>
-            )}
+            <div className="preset-buttons">
+              {[[1,10],[1,50],[1,100],[278,278]].map(([s,e]) => (
+                <button
+                  key={`${s}-${e}`}
+                  className="preset-btn"
+                  disabled={downloading}
+                  onClick={() => { setStartPart(s); setEndPart(e) }}
+                >
+                  {s === e ? `Part ${s}` : `${s}–${e}`}
+                </button>
+              ))}
+            </div>
           </div>
+        )}
 
-          {/* Progress Bar */}
-          {downloadProgress && downloadProgress.in_progress && (
-            <div className="progress-section">
-              <div className="progress-info">
-                <span>
-                  Part {downloadProgress.current_part} of {downloadProgress.total_parts}
-                </span>
-                <span className="progress-count">
-                  ✓ {downloadProgress.completed_parts} | ✗ {downloadProgress.failed_parts}
-                </span>
-              </div>
-              <div className="progress-bar">
-                <div
-                  className="progress-fill"
-                  style={{
-                    width: `${(downloadProgress.completed_parts / downloadProgress.total_parts) * 100}%`
-                  }}
-                />
-              </div>
-              <p className="progress-status">
-                Status: <strong>{downloadProgress.status.toUpperCase()}</strong>
-              </p>
+        {/* Specific parts input */}
+        {downloadMode === 'specific' && (
+          <div className="input-group">
+            <div className="form-group">
+              <label>Part Numbers (comma-separated)</label>
+              <input
+                type="text"
+                value={specificParts}
+                onChange={e => setSpecificParts(e.target.value)}
+                disabled={downloading}
+                placeholder="e.g., 1, 5, 10, 278"
+              />
+              <small>Enter values between 1–527</small>
             </div>
-          )}
+          </div>
+        )}
 
-          {/* Downloaded PDFs List */}
-          <div className="pdfs-list">
-            <div className="pdfs-list-header">
-              <h3>📁 Downloaded PDFs (Total: {totalPdfs})</h3>
+        <button
+          className={`download-btn ${downloading ? 'downloading' : ''}`}
+          onClick={handleDownload}
+          disabled={downloading || loading}
+        >
+          {downloading ? '⏳ Downloading…' : '⬇️ Start Download'}
+        </button>
+
+        {/* Progress */}
+        {downloadProgress?.in_progress && (
+          <div className="progress-section">
+            <div className="progress-info">
+              <span>Part {downloadProgress.current_part} of {downloadProgress.total_parts}</span>
+              <span className="progress-count">
+                ✓ {downloadProgress.completed_parts} | ✗ {downloadProgress.failed_parts}
+              </span>
             </div>
-            {loading ? (
-              <div className="loading-skeleton">
-                <p>🔄 Loading PDFs...</p>
-              </div>
-            ) : pdfs.length === 0 ? (
-              <p className="no-pdfs">No PDFs downloaded yet. Start downloading to see them here.</p>
-            ) : (
-              <>
-                <div className="pdf-grid">
-                  {pdfs.map((pdf) => (
-                    <div key={pdf.filename} className="pdf-item">
-                      <div className="pdf-number">#{pdf.part_number}</div>
-                      <div className="pdf-filename">{pdf.filename}</div>
-                      <div className="pdf-size">{pdf.size_mb} MB</div>
-                    </div>
-                  ))}
+            <div className="progress-bar">
+              <div className="progress-fill" style={{ width: `${progressPct}%` }} />
+            </div>
+            <div className="progress-status">
+              <strong>{progressPct}%</strong> complete
+            </div>
+          </div>
+        )}
+
+        {/* PDF list */}
+        <div className="pdfs-list">
+          <h3>📁 Downloaded PDFs ({pdfs.length})</h3>
+          {loading ? (
+            <p className="loading">Loading…</p>
+          ) : pdfs.length === 0 ? (
+            <p className="no-pdfs">No PDFs downloaded yet</p>
+          ) : (
+            <div className="pdf-grid">
+              {pdfs.map(pdf => (
+                <div key={pdf.filename} className="pdf-item">
+                  <div className="pdf-number">#{pdf.part_number}</div>
+                  <div className="pdf-filename">{pdf.filename}</div>
+                  <div className="pdf-size">{pdf.size_mb} MB</div>
                 </div>
-                {totalPages > 1 && (
-                  <div className="pagination">
-                    <button
-                      onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                      disabled={currentPage === 1}
-                      className="pagination-btn"
-                    >
-                      ← Previous
-                    </button>
-                    <span className="pagination-info">
-                      Page {currentPage} of {totalPages}
-                    </span>
-                    <button
-                      onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                      disabled={currentPage >= totalPages}
-                      className="pagination-btn"
-                    >
-                      Next →
-                    </button>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
-    </>
+    </div>
   )
 }

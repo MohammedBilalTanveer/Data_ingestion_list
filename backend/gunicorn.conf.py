@@ -7,15 +7,18 @@ bind = f"0.0.0.0:{os.getenv('PORT', '5000')}"
 # Multiple workers each get their own copy, breaking download status polling.
 workers = 1
 
-# Threads let the single worker handle concurrent requests:
-# e.g. a PDF download running in a background thread while the frontend
-# polls /api/downloads/status every second.
+# gthread = threaded sync worker.
+# Required for SSE streaming (/api/search/stream): one thread holds the
+# long-lived SSE connection open while executor threads process PDFs in parallel.
+worker_class = "gthread"
+
+# 4 HTTP threads — handles concurrent requests (SSE + status polling + render).
 threads = 4
 
-# PDF rendering with PyMuPDF and large PDF searches can be slow.
-timeout = 120
+# Generous timeout for SSE streaming over large ranges and slow PDF renders.
+timeout = 300
 
-# Keep connections alive between requests (helps with frequent status polls).
+# Keep connections alive between requests.
 keepalive = 5
 
 # Log to stdout so Render captures it in the dashboard.

@@ -1,284 +1,297 @@
-import { useState, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import './SearchInterface.css'
 import { API_URL } from '../config'
+import RangeSlider from './RangeSlider'
 
-export default function SearchInterface({ refreshTrigger }) {
-  const [pdfs, setPdfs] = useState([])
-  const [selectedParts, setSelectedParts] = useState([])
-  const [searchQuery, setSearchQuery] = useState('')
-  const [searching, setSearching] = useState(false)
-  const [results, setResults] = useState(null)
-  const [error, setError] = useState('')
-  const [currentPage, setCurrentPage] = useState({})
-  const [loading, setLoading] = useState(true)
-  const [pdfPage, setPdfPage] = useState(1)
-  const [itemsPerPage] = useState(30)
-  const [totalPages, setTotalPages] = useState(1)
-  const [pdfFilterQuery, setPdfFilterQuery] = useState('')
-  const [filteredPdfs, setFilteredPdfs] = useState([])
+export default function SearchInterface() {
+  const [startPart,  setStartPart]  = useState(1)
+  const [endPart,    setEndPart]    = useState(10)
+  const [query,      setQuery]      = useState('')
+  const [searching,  setSearching]  = useState(false)
+  const [error,      setError]      = useState('')
 
-  // Load PDFs on mount and when refreshTrigger changes
+  // Translation
+  const [translateOn,      setTranslateOn]      = useState(false)
+  const [kannadaPreview,   setKannadaPreview]   = useState('')   // live preview
+  const [previewLoading,   setPreviewLoading]   = useState(false)
+  const [translatedQuery,  setTranslatedQuery]  = useState('')   // used in results
+
+  // Streaming result state
+  const [results,       setResults]       = useState({})   // { "Part N": resultObj }
+  const [progress,      setProgress]      = useState(null) // { searched, total, done }
+  const [totalMatches,  setTotalMatches]  = useState(0)
+  const [searchedQuery, setSearchedQuery] = useState('')
+
+  const hasResults = Object.keys(results).length > 0
+
+  const handleRangeChange = useCallback((s, e) => {
+    setStartPart(s)
+    setEndPart(e)
+  }, [])
+
+  // Debounced live Kannada preview — fires 600 ms after the user stops typing
+  const previewTimer = useRef(null)
   useEffect(() => {
-    loadPDFs()
-  }, [refreshTrigger, pdfPage])
-
-  // Filter PDFs based on search query
-  useEffect(() => {
-    if (pdfFilterQuery.trim() === '') {
-      setFilteredPdfs(pdfs)
-    } else {
-      const query = pdfFilterQuery.toLowerCase()
-      const filtered = pdfs.filter(pdf => 
-        pdf.part_number.toString().includes(query) ||
-        pdf.filename.toLowerCase().includes(query)
-      )
-      setFilteredPdfs(filtered)
+    if (!translateOn || query.trim().length < 2) {
+      setKannadaPreview('')
+      return
     }
-  }, [pdfFilterQuery, pdfs])
+    clearTimeout(previewTimer.current)
+    previewTimer.current = setTimeout(async () => {
+      setPreviewLoading(true)
+      try {
+        const res  = await fetch(`${API_URL}/api/translate`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ text: query.trim() })
+        })
+        const data = await res.json()
+        if (data.success) setKannadaPreview(data.translated)
+      } catch { /* silent — preview is best-effort */ }
+      finally { setPreviewLoading(false) }
+    }, 600)
+    return () => clearTimeout(previewTimer.current)
+  }, [query, translateOn])
 
-  const loadPDFs = async () => {
-    try {
-      setLoading(true)
-      const response = await fetch(`${API_URL}/api/pdfs/list?page=${pdfPage}&per_page=${itemsPerPage}`)
-      const data = await response.json()
-
-      if (data.success) {
-        const pdfList = data.pdfs || []
-        setPdfs(pdfList)
-        setTotalPages(data.total_pages || 1)
-
-        // Pre-select PDF 278 if available on current page
-        if (pdfList.some(p => p.part_number === 278)) {
-          setSelectedParts([278])
-        }
-      }
-    } catch (error) {
-      setError('Failed to load PDF list')
-      console.error(error)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const handlePartToggle = (partNumber) => {
-    setSelectedParts(prev => {
-      if (prev.includes(partNumber)) {
-        return prev.filter(p => p !== partNumber)
-      } else {
-        return [...prev, partNumber]
-      }
-    })
-    setCurrentPage({})
-  }
-
-  const handleSelectAll = () => {
-    if (selectedParts.length === filteredPdfs.length && filteredPdfs.length > 0) {
-      setSelectedParts([])
-    } else {
-      setSelectedParts(filteredPdfs.map(p => p.part_number))
-    }
-    setCurrentPage({})
-  }
-
-  const handleSearch = async (e) => {
-    e.preventDefault()
+  const handleSearch = async (ev) => {
+    ev.preventDefault()
     setError('')
-    setResults(null)
-    setCurrentPage({})
+    setResults({})
+    setProgress(null)
+    setTotalMatches(0)
+    setSearchedQuery('')
 
-    if (!searchQuery.trim() || searchQuery.length < 2) {
+    if (!query.trim() || query.length < 2) {
       setError('Search query must be at least 2 characters')
       return
     }
 
-    if (selectedParts.length === 0) {
-      setError('Please select at least one PDF')
-      return
-    }
+    const partNumbers = Array.from(
+      { length: endPart - startPart + 1 },
+      (_, i) => startPart + i
+    )
 
     setSearching(true)
+    setTranslatedQuery('')
 
     try {
-      const response = await fetch(`${API_URL}/api/search`, {
-        method: 'POST',
+      const response = await fetch(`${API_URL}/api/search/stream`, {
+        method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          query: searchQuery,
-          part_numbers: selectedParts
-        })
+        body:    JSON.stringify({ query: query.trim(), part_numbers: partNumbers, translate: translateOn })
       })
 
-      const data = await response.json()
-
-      if (data.success) {
-        setResults(data)
-        setCurrentPage({})
-      } else {
-        setError(data.error || 'Search failed')
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}))
+        throw new Error(err.error || `HTTP ${response.status}`)
       }
-    } catch (error) {
-      setError('Error performing search: ' + error.message)
-      console.error(error)
-    } finally {
+
+      const reader  = response.body.getReader()
+      const decoder = new TextDecoder()
+      let   buffer  = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+
+        // SSE events are delimited by double newlines
+        const events = buffer.split('\n\n')
+        buffer = events.pop() // last element may be incomplete
+
+        for (const event of events) {
+          const dataLine = event.split('\n').find(l => l.startsWith('data: '))
+          if (!dataLine) continue
+
+          let payload
+          try { payload = JSON.parse(dataLine.slice(6)) } catch { continue }
+
+          if (payload.type === 'start') {
+            setProgress({ searched: 0, total: payload.total, done: false })
+            if (payload.translated_query) setTranslatedQuery(payload.translated_query)
+
+          } else if (payload.type === 'result') {
+            setProgress({ searched: payload.searched, total: payload.total, done: false })
+            setTotalMatches(payload.total_matches)
+            const key = `Part ${payload.data.part_number}`
+            setResults(prev => ({ ...prev, [key]: payload.data }))
+
+          } else if (payload.type === 'progress') {
+            setProgress({ searched: payload.searched, total: payload.total, done: false })
+            setTotalMatches(payload.total_matches)
+
+          } else if (payload.type === 'done') {
+            setProgress({ searched: payload.searched, total: payload.total, done: true })
+            setTotalMatches(payload.total_matches)
+            setSearchedQuery(payload.query)
+            if (payload.translated_query) setTranslatedQuery(payload.translated_query)
+            setSearching(false)
+          }
+        }
+      }
+    } catch (err) {
+      setError('Search error: ' + err.message)
       setSearching(false)
     }
   }
 
-  const handleClearResults = () => {
-    setResults(null)
-    setSearchQuery('')
-    setCurrentPage({})
+  const handleClear = () => {
+    setResults({})
+    setProgress(null)
+    setTotalMatches(0)
+    setSearchedQuery('')
+    setError('')
+    setQuery('')
   }
+
+  // Sort result entries by part number for consistent ordering
+  const sortedEntries = Object.entries(results).sort(
+    ([, a], [, b]) => a.part_number - b.part_number
+  )
 
   return (
     <div className="search-interface">
       <div className="search-container">
-        {/* Search Form */}
+
+        {/* Search form */}
         <form onSubmit={handleSearch} className="search-form">
           <div className="search-input-group">
             <input
               type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Enter search query (name, number, keyword...)"
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              placeholder={translateOn ? 'Type name in English — will search in Kannada…' : 'Enter name, voter ID, number…'}
               className="search-input"
               disabled={searching}
               maxLength={100}
             />
+            <button
+              type="button"
+              className={`translate-toggle ${translateOn ? 'translate-on' : ''}`}
+              onClick={() => { setTranslateOn(v => !v); setKannadaPreview('') }}
+              disabled={searching}
+              title={translateOn ? 'Disable Kannada translation' : 'Enable Kannada translation'}
+            >
+              {translateOn ? '🌐 ಕನ್ನಡ ON' : '🌐 ಕನ್ನಡ'}
+            </button>
             <button type="submit" disabled={searching} className="search-btn">
-              {searching ? '⏳ Searching...' : '🔍 Search'}
+              {searching ? '⏳ Searching…' : '🔍 Search'}
             </button>
           </div>
+
+          {/* Live Kannada preview */}
+          {translateOn && (
+            <div className="kannada-preview">
+              {previewLoading
+                ? <span className="kp-loading">Translating…</span>
+                : kannadaPreview
+                  ? <><span className="kp-label">Will search in Kannada:</span> <span className="kp-text">{kannadaPreview}</span></>
+                  : <span className="kp-hint">Type a name above to see its Kannada translation</span>
+              }
+            </div>
+          )}
         </form>
 
         {error && <div className="error-message">{error}</div>}
 
-        {/* PDF Selection */}
+        {/* Numerical Interval selector */}
         <div className="pdf-selection">
           <div className="selection-header">
-            <h3>Select PDFs to Search (Total: {pdfs.length})</h3>
-            <button 
-              onClick={handleSelectAll}
-              className="select-all-btn"
-              disabled={loading || filteredPdfs.length === 0}
-            >
-              {selectedParts.length === filteredPdfs.length && filteredPdfs.length > 0 ? 'Deselect Filtered' : 'Select Filtered'}
-            </button>
+            <h3>Numerical Interval — Select Part Range</h3>
+          </div>
+          <RangeSlider
+            start={startPart}
+            end={endPart}
+            onChange={handleRangeChange}
+            disabled={searching}
+          />
+          <div className="preset-row">
+            <span className="preset-label">Quick:</span>
+            {[[1,10],[1,50],[1,100],[278,278],[1,527]].map(([s,e]) => (
+              <button
+                key={`${s}-${e}`}
+                className="preset-chip"
+                onClick={() => { setStartPart(s); setEndPart(e) }}
+                disabled={searching}
+              >
+                {s === e ? `Part ${s}` : `${s}–${e}`}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Live streaming progress bar ── */}
+      {progress && (
+        <div className={`stream-progress-bar ${progress.done ? 'stream-done' : 'stream-active'}`}>
+          <div className="stream-track">
+            <div
+              className="stream-fill"
+              style={{ width: `${Math.round((progress.searched / Math.max(progress.total, 1)) * 100)}%` }}
+            />
+          </div>
+          <div className="stream-labels">
+            <span className="stream-status">
+              {progress.done
+                ? `✓ Done — ${progress.total} part${progress.total !== 1 ? 's' : ''} searched`
+                : `Searching ${progress.searched} / ${progress.total} parts…`}
+            </span>
+            {totalMatches > 0 && (
+              <span className="stream-match-pill">{totalMatches} match{totalMatches !== 1 ? 'es' : ''} found</span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Results (appear progressively) ── */}
+      {(hasResults || (progress?.done && totalMatches === 0)) && (
+        <div className="results-section">
+          <div className="results-header">
+            <h2>🎯 Results</h2>
+            <button onClick={handleClear} className="clear-btn">✕ Clear</button>
           </div>
 
-          {/* PDF Filter Input */}
-          {pdfs.length > 0 && (
-            <div className="pdf-filter-section">
-              <input
-                type="text"
-                placeholder="🔍 Filter by part number or filename (e.g., 278 or A088)"
-                value={pdfFilterQuery}
-                onChange={(e) => setPdfFilterQuery(e.target.value)}
-                className="pdf-filter-input"
-                disabled={loading}
-              />
-              {pdfFilterQuery && (
-                <span className="filter-result-count">
-                  {filteredPdfs.length} of {pdfs.length} PDF(s)
-                </span>
+          {progress?.done && (
+            <div className="results-summary">
+              <p>
+                Found <strong>{totalMatches}</strong> match{totalMatches !== 1 ? 'es' : ''} for&nbsp;
+                "<strong>{searchedQuery}</strong>"
+                {translatedQuery && (
+                  <span className="translated-label"> → searched as "<strong className="kannada-result">{translatedQuery}</strong>" in Kannada</span>
+                )}
+                &nbsp;in <strong>{sortedEntries.length}</strong> PDF{sortedEntries.length !== 1 ? 's' : ''}&nbsp;
+                <span className="summary-range">(Parts {startPart}–{endPart})</span>
+              </p>
+              {totalMatches === 0 && progress.searched > 0 && (
+                <p className="no-pdf-hint">
+                  No matches — try a different query or download more PDFs in this range.
+                </p>
+              )}
+              {progress.searched > 0 && sortedEntries.length === 0 && totalMatches === 0 && (
+                <p className="no-pdf-hint">
+                  No PDFs were found in this range. Go to the Download tab to fetch them first.
+                </p>
               )}
             </div>
           )}
 
-          {loading ? (
-            <p className="loading">🔄 Loading PDFs...</p>
-          ) : pdfs.length === 0 ? (
-            <div className="no-pdfs-message">
-              <p>📥 No PDFs downloaded yet</p>
-              <small>Go to "Download PDFs" tab to download PDFs first</small>
+          {/* Streaming skeleton cards for parts still being searched */}
+          {searching && (
+            <div className="stream-hint">
+              Results appear as each PDF finishes — keep scrolling
             </div>
-          ) : filteredPdfs.length === 0 ? (
-            <div className="no-pdfs-message">
-              <p>❌ No PDFs match your filter</p>
-              <small>Try a different search term</small>
-            </div>
-          ) : (
-            <>
-              <div className="pdf-checkboxes">
-                {filteredPdfs.map((pdf) => (
-                  <label key={pdf.part_number} className="pdf-checkbox-label">
-                    <input
-                      type="checkbox"
-                      checked={selectedParts.includes(pdf.part_number)}
-                      onChange={() => handlePartToggle(pdf.part_number)}
-                      className="pdf-checkbox"
-                    />
-                    <span className="checkbox-custom"></span>
-                    <span className="pdf-info">
-                      <span className="pdf-part">Part {pdf.part_number}</span>
-                      <span className="pdf-size">{pdf.size_mb} MB</span>
-                    </span>
-                  </label>
-                ))}
-              </div>
-              
-              {/* Pagination Controls */}
-              <div className="pagination-controls">
-                <button
-                  onClick={() => setPdfPage(p => Math.max(1, p - 1))}
-                  disabled={pdfPage === 1}
-                  className="page-btn"
-                >
-                  ← Previous
-                </button>
-                <span className="page-info">
-                  Page {pdfPage} of {totalPages}
-                </span>
-                <button
-                  onClick={() => setPdfPage(p => Math.min(totalPages, p + 1))}
-                  disabled={pdfPage >= totalPages}
-                  className="page-btn"
-                >
-                  Next →
-                </button>
-              </div>
-            </>
           )}
-        </div>
 
-        {/* Selected Count */}
-        {selectedParts.length > 0 && (
-          <div className="selected-info">
-            <span>📌 {selectedParts.length} PDF(s) selected</span>
-          </div>
-        )}
-      </div>
-
-      {/* Results Section */}
-      {results && (
-        <div className="results-section">
-          <div className="results-header">
-            <h2>🎯 Search Results</h2>
-            <button onClick={handleClearResults} className="clear-btn">
-              ✕ Clear Results
-            </button>
-          </div>
-
-          <div className="results-summary">
-            <p>
-              Found <strong>{results.total_matches}</strong> match(es) for "<strong>{results.query}</strong>" 
-              in <strong>{results.total_files_searched}</strong> PDF(s)
-            </p>
-          </div>
-
-          {results.total_matches === 0 ? (
+          {sortedEntries.length === 0 && progress?.done ? (
             <div className="no-results">
-              <p>❌ No matches found</p>
-              <small>Try a different search query or select more PDFs</small>
+              <p>No matches found</p>
+              <small>Try a different query or expand the range</small>
             </div>
           ) : (
             <div className="results-list">
-              {Object.entries(results.results).map(([fileName, fileResults]) => (
-                <ResultsCard 
-                  key={fileName}
-                  fileName={fileName}
-                  fileResults={fileResults}
-                />
+              {sortedEntries.map(([key, fileResults]) => (
+                <ResultsCard key={key} fileName={key} fileResults={fileResults} />
               ))}
             </div>
           )}
@@ -288,29 +301,25 @@ export default function SearchInterface({ refreshTrigger }) {
   )
 }
 
+/* ── Individual result card ─────────────────────────────────────────────────── */
 function ResultsCard({ fileName, fileResults }) {
-  const [expanded, setExpanded] = useState(true)
+  const [expanded,     setExpanded]     = useState(true)
   const [displayCount, setDisplayCount] = useState(10)
   const [viewingImage, setViewingImage] = useState(null)
 
-  // Extract part number from results metadata or parse from filename
-  const partNumber = fileResults.part_number || parseInt(fileName.replace(/[^0-9]/g, '').slice(-3)) || 0
+  const partNumber = fileResults.part_number ||
+    parseInt(fileName.replace(/[^0-9]/g, '').slice(-3)) || 0
 
-  const handleViewPage = (page) => {
-    if (viewingImage === page) {
-      setViewingImage(null) // Toggle off
-    } else {
-      setViewingImage(page)
-    }
-  }
+  const toggleImage = (page) =>
+    setViewingImage(v => (v === page ? null : page))
 
   return (
-    <div className="results-card">
-      <div className="card-header" onClick={() => setExpanded(!expanded)}>
+    <div className="results-card results-card-enter">
+      <div className="card-header" onClick={() => setExpanded(x => !x)}>
         <div className="card-title">
           <span className="expand-icon">{expanded ? '▼' : '▶'}</span>
           <h4>📄 {fileName}</h4>
-          <span className="match-count">{fileResults.count} matches</span>
+          <span className="match-count">{fileResults.count} match{fileResults.count !== 1 ? 'es' : ''}</span>
         </div>
       </div>
 
@@ -324,30 +333,28 @@ function ResultsCard({ fileName, fileResults }) {
                     <span className="match-number">#{idx + 1}</span>
                     <span className="match-page">Page {match.page}</span>
                   </div>
-                  <button 
+                  <button
                     className={`view-page-btn ${viewingImage === match.page ? 'active' : ''}`}
-                    onClick={() => handleViewPage(match.page)}
+                    onClick={() => toggleImage(match.page)}
                   >
-                    {viewingImage === match.page ? '✖ Close Image' : '👁️ View Original Page'}
+                    {viewingImage === match.page ? '✖ Close' : '👁️ View Page'}
                   </button>
                 </div>
-                <div className="match-snippet">
-                  {match.snippet}
-                </div>
-                
-                {/* PDF Page Image Viewer */}
+
+                <div className="match-snippet">{match.snippet}</div>
+
                 {viewingImage === match.page && (
                   <div className="pdf-image-viewer">
-                    <div className="image-loading-placeholder">Loading High Quality PDF Page...</div>
-                    <img 
-                      src={`${API_URL}/api/pdfs/render/${partNumber}/${match.page}`} 
-                      alt={`PDF Part ${partNumber} Page ${match.page}`}
+                    <div className="image-loading-placeholder">Loading page…</div>
+                    <img
+                      src={`${API_URL}/api/pdfs/render/${partNumber}/${match.page}`}
+                      alt={`Part ${partNumber} Page ${match.page}`}
                       className="pdf-page-image"
                       loading="lazy"
-                      onLoad={(e) => e.target.previousSibling.style.display = 'none'}
-                      onError={(e) => {
-                        e.target.previousSibling.innerText = 'Failed to load image. Ensure backend is running.';
-                        e.target.style.display = 'none';
+                      onLoad={e => (e.target.previousSibling.style.display = 'none')}
+                      onError={e => {
+                        e.target.previousSibling.innerText = 'Failed to load image.'
+                        e.target.style.display = 'none'
                       }}
                     />
                   </div>
@@ -358,10 +365,11 @@ function ResultsCard({ fileName, fileResults }) {
 
           {fileResults.count > displayCount && (
             <button
-              onClick={() => setDisplayCount(displayCount + 10)}
+              onClick={() => setDisplayCount(c => c + 10)}
               className="load-more-btn"
             >
-              Load more ({fileResults.count - displayCount} remaining)
+              Load {Math.min(10, fileResults.count - displayCount)} more
+              ({fileResults.count - displayCount} remaining)
             </button>
           )}
         </div>

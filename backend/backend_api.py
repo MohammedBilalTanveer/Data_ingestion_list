@@ -6,7 +6,8 @@ import sys
 import json
 import time
 import threading
-from flask import Flask, jsonify, request
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from flask import Flask, jsonify, request, Response, stream_with_context
 from flask_cors import CORS
 import requests
 from urllib.parse import quote
@@ -81,6 +82,18 @@ BASE_DIR = os.path.dirname(__file__)
 # Locally it falls back to output/pdfs/ inside the backend folder.
 PDF_DIR = os.getenv('PDF_STORAGE_PATH', os.path.join(BASE_DIR, 'output', 'pdfs'))
 
+# How many PDFs to search in parallel (streaming search endpoint).
+# Kept at 4 so we don't overwhelm the single gunicorn process.
+MAX_SEARCH_WORKERS = int(os.getenv('MAX_SEARCH_WORKERS', '4'))
+
+# ── PDF text cache ────────────────────────────────────────────────────────────
+# Local-file cache (used by get_pdf_text_cached): { pdf_path: (mtime, pages_text) }
+_pdf_text_cache: dict = {}
+
+# Storage-aware cache (used by streaming search): { storage_key: (file_size, pages_text) }
+# Works with both S3 and local backends — key is the storage path e.g. "pdfs/A0880278.pdf"
+_pdf_storage_cache: dict = {}
+
 # Global state for downloads
 download_state = {
     "in_progress": False,
@@ -102,7 +115,7 @@ DOWNLOAD_PASSWORD = os.getenv('DOWNLOAD_PASSWORD', '')
 AUTH_ENABLED = bool(DOWNLOAD_USERNAME and DOWNLOAD_PASSWORD)
 
 if not AUTH_ENABLED:
-    print("⚠️  WARNING: Authentication disabled - no DOWNLOAD_USERNAME/PASSWORD set")
+    print("[WARNING] Authentication disabled - no DOWNLOAD_USERNAME/PASSWORD set")
     print("    Set environment variables to enable login")
 
 
@@ -159,6 +172,102 @@ def download_pdf_file(url: str, file_path: str, max_retries: int = 3) -> bool:
     return False
 
 
+def get_pdf_text_cached(pdf_path: str) -> dict:
+    """Return cached page text for a PDF, extracting fresh only when the file changed."""
+    try:
+        mtime = os.path.getmtime(pdf_path)
+    except OSError:
+        return {}
+
+    if pdf_path in _pdf_text_cache:
+        cached_mtime, pages_text = _pdf_text_cache[pdf_path]
+        if cached_mtime == mtime:
+            return pages_text
+
+    pages_text = extract_text_from_pdf(pdf_path)
+    _pdf_text_cache[pdf_path] = (mtime, pages_text)
+    return pages_text
+
+
+def get_pdf_text_from_storage(storage_key: str) -> dict:
+    """
+    Load & cache PDF text via the storage abstraction (S3 or local).
+    Uses file-size as cache-validity marker — voter PDFs never change after download.
+    """
+    import tempfile
+
+    try:
+        file_size = storage.get_file_size(storage_key)
+    except Exception:
+        file_size = -1
+
+    if storage_key in _pdf_storage_cache:
+        cached_size, pages_text = _pdf_storage_cache[storage_key]
+        if cached_size == file_size and file_size > 0:
+            return pages_text
+
+    pdf_content = storage.load_file(storage_key)
+    if not pdf_content:
+        return {}
+
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp:
+            tmp.write(pdf_content)
+            temp_path = tmp.name
+        pages_text = extract_text_from_pdf(temp_path)
+    except Exception as exc:
+        print(f"Error extracting text from {storage_key}: {exc}")
+        pages_text = {}
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+
+    _pdf_storage_cache[storage_key] = (file_size, pages_text)
+    return pages_text
+
+
+def search_via_storage(storage_key: str, query: str, case_sensitive: bool = False) -> list:
+    """
+    Search a PDF identified by its storage key.
+    Uses get_pdf_text_from_storage so results are cached on first access.
+    """
+    if not query or len(query.strip()) < 2:
+        return []
+
+    query      = query.strip()
+    query_cmp  = query if case_sensitive else query.lower()
+    pages_text = get_pdf_text_from_storage(storage_key)
+
+    if not pages_text:
+        return []
+
+    matches = []
+    for page_num in sorted(pages_text.keys()):
+        text = pages_text[page_num]
+        if not text:
+            continue
+        lines = text.split('\n')
+        for idx, line in enumerate(lines):
+            line_cmp = line if case_sensitive else line.lower()
+            if query_cmp in line_cmp:
+                ctx = []
+                if idx > 0 and lines[idx - 1].strip():
+                    ctx.append(lines[idx - 1].strip())
+                ctx.append(line.strip())
+                if idx < len(lines) - 1 and lines[idx + 1].strip():
+                    ctx.append(lines[idx + 1].strip())
+                matches.append({
+                    'page': page_num,
+                    'snippet': ' | '.join(ctx),
+                    'original_line': line.strip()
+                })
+    return matches
+
+
 def extract_text_from_pdf(pdf_path: str) -> dict:
     """Extract all text from a PDF organized by page"""
     pages_text = {}
@@ -180,12 +289,12 @@ def extract_text_from_pdf(pdf_path: str) -> dict:
 
 
 def search_in_pdf(pdf_path: str, query: str, case_sensitive: bool = False) -> list:
-    """Search for query in a single PDF"""
+    """Search for query in a single PDF (uses in-memory text cache)"""
     if not query or len(query.strip()) < 2:
         return []
-    
+
     query = query.strip()
-    pages_text = extract_text_from_pdf(pdf_path)
+    pages_text = get_pdf_text_cached(pdf_path)
     
     if not pages_text:
         return []
@@ -259,7 +368,7 @@ def download_pdfs_in_range(start_part: int, end_part: int) -> None:
             
             # Download
             url = create_pdf_url(DISTRICT, AC_NUMBER, part)
-            print(f"⬇ Downloading Part {part}...")
+            print(f"[DL] Downloading Part {part}...")
             
             if download_pdf_file(url, file_path):
                 download_state["completed_parts"].append(part)
@@ -600,6 +709,148 @@ def search():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+# ── Kannada translation ───────────────────────────────────────────────────────
+
+def translate_to_kannada(text: str) -> str:
+    """
+    Translate arbitrary text to Kannada using Google Translate (deep-translator).
+    Falls back to the original text on any error so search always continues.
+    """
+    try:
+        from deep_translator import GoogleTranslator
+        result = GoogleTranslator(source='auto', target='kn').translate(text.strip())
+        return result if result else text
+    except Exception as exc:
+        print(f"[translate] Error: {exc}")
+        return text
+
+
+@app.route('/api/translate', methods=['POST'])
+def translate_text():
+    """
+    Translate text to Kannada.
+    Body: { "text": "Mohan Kumar" }
+    Returns: { "success": true, "original": "...", "translated": "ಮೋಹನ್ ಕುಮಾರ್" }
+    """
+    body = request.get_json(silent=True) or {}
+    text = body.get('text', '').strip()
+
+    if not text:
+        return jsonify({"success": False, "error": "No text provided"}), 400
+
+    translated = translate_to_kannada(text)
+    return jsonify({
+        "success":     True,
+        "original":    text,
+        "translated":  translated,
+        "target_lang": "kn"
+    })
+
+
+# ── Streaming search (SSE + parallel) ────────────────────────────────────────
+
+def _search_one_part(part_num: int, query: str) -> dict | None:
+    """
+    Search a single PDF part via the storage backend (S3 or local).
+    Returns a result dict or None if the part doesn't exist / has no matches.
+    Used by the parallel ThreadPoolExecutor in search_stream().
+    """
+    filename    = get_pdf_filename(AC_NUMBER, part_num)
+    storage_key = f"pdfs/{filename}"
+
+    if not storage.file_exists(storage_key):
+        return None
+
+    matches = search_via_storage(storage_key, query)
+    if not matches:
+        return None
+
+    return {
+        "part_number": part_num,
+        "filename":    filename,
+        "matches":     matches,
+        "count":       len(matches)
+    }
+
+
+@app.route('/api/search/stream', methods=['POST'])
+def search_stream():
+    """
+    Stream search results as Server-Sent Events.
+
+    PDFs are processed in parallel (MAX_SEARCH_WORKERS at a time).
+    Each result is emitted immediately when its PDF finishes — the browser
+    renders results one by one rather than waiting for all PDFs to finish.
+
+    Event types emitted:
+      {"type": "start",    "total": N, "query": "..."}
+      {"type": "result",   "data": {...}, "searched": N, "total": N, "total_matches": N}
+      {"type": "progress", "searched": N, "total": N, "total_matches": N}
+      {"type": "done",     "searched": N, "total": N, "total_matches": N, "query": "..."}
+    """
+    body         = request.get_json(silent=True) or {}
+    query        = body.get('query', '').strip()
+    part_numbers = body.get('part_numbers', [])
+    do_translate = bool(body.get('translate', False))
+
+    if not query or len(query) < 2:
+        return jsonify({"success": False, "error": "Query must be at least 2 characters"}), 400
+    if not part_numbers:
+        return jsonify({"success": False, "error": "No parts specified"}), 400
+
+    # Translate once up-front so all parallel workers share the same search term
+    search_query      = translate_to_kannada(query) if do_translate else query
+    translated_query  = search_query if do_translate else None
+
+    def generate():
+        total         = len(part_numbers)
+        searched      = 0
+        total_matches = 0
+
+        yield f"data: {json.dumps({'type': 'start', 'total': total, 'query': query, 'translated_query': translated_query})}\n\n"
+
+        with ThreadPoolExecutor(max_workers=MAX_SEARCH_WORKERS) as executor:
+            futures = {executor.submit(_search_one_part, p, search_query): p for p in part_numbers}
+
+            for future in as_completed(futures):
+                searched += 1
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    print(f"Search worker error: {exc}")
+                    result = None
+
+                if result:
+                    total_matches += result['count']
+                    payload = {
+                        'type': 'result',
+                        'data': result,
+                        'searched': searched,
+                        'total': total,
+                        'total_matches': total_matches
+                    }
+                else:
+                    payload = {
+                        'type': 'progress',
+                        'searched': searched,
+                        'total': total,
+                        'total_matches': total_matches
+                    }
+                yield f"data: {json.dumps(payload)}\n\n"
+
+        yield f"data: {json.dumps({'type': 'done', 'searched': searched, 'total': total, 'total_matches': total_matches, 'query': query, 'translated_query': translated_query})}\n\n"
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',   # prevents nginx/Render from buffering the stream
+            'Connection': 'keep-alive',
+        }
+    )
+
+
 @app.route('/api/search/single', methods=['POST'])
 def search_single():
     """Search in a single PDF and return paginated results"""
@@ -680,44 +931,56 @@ def info():
 
 @app.route('/api/pdfs/render/<int:part_number>/<int:page>', methods=['GET'])
 def render_pdf_page(part_number, page):
-    """Render a specific page of a PDF as a PNG image"""
+    """Render a specific PDF page as a PNG image via the storage backend (S3 or local)."""
+    import tempfile
+    temp_path = None
+    doc = None
     try:
-        filename = get_pdf_filename(AC_NUMBER, part_number)
-        pdf_path = os.path.join(PDF_DIR, filename)
-        
-        if not os.path.exists(pdf_path):
+        filename    = get_pdf_filename(AC_NUMBER, part_number)
+        storage_key = f"pdfs/{filename}"
+
+        if not storage.file_exists(storage_key):
             return jsonify({"success": False, "error": f"PDF Part {part_number} not found"}), 404
-            
-        # Open PDF with PyMuPDF
-        doc = fitz.open(pdf_path)
-        
-        # Validate page number (1-indexed from frontend, 0-indexed in fitz)
+
+        # Load bytes from storage (uses in-memory text cache indirectly; PDF bytes loaded fresh)
+        pdf_content = storage.load_file(storage_key)
+        if not pdf_content:
+            return jsonify({"success": False, "error": f"Failed to load PDF Part {part_number}"}), 500
+
+        # Write to temp file — PyMuPDF (fitz) requires a file path
+        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp:
+            tmp.write(pdf_content)
+            temp_path = tmp.name
+
+        doc = fitz.open(temp_path)
+
         if page < 1 or page > len(doc):
-            doc.close()
-            return jsonify({"success": False, "error": f"Invalid page number. Max: {len(doc)}"}), 400
-            
-        # Get the page
+            return jsonify({"success": False, "error": f"Invalid page. PDF has {len(doc)} page(s)"}), 400
+
         pdf_page = doc[page - 1]
-        
-        # Render page to a pixmap (image)
-        # zoom=2 for better quality (144 dpi instead of 72 dpi)
-        zoom = 2.0
-        mat = fitz.Matrix(zoom, zoom)
-        pix = pdf_page.get_pixmap(matrix=mat, alpha=False)
-        
-        # Convert to bytes
+
+        # 2× zoom = 144 dpi for crisp rendering
+        pix      = pdf_page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0), alpha=False)
         img_bytes = pix.tobytes("png")
-        doc.close()
-        
+
         return send_file(
             io.BytesIO(img_bytes),
             mimetype='image/png',
             as_attachment=False,
             download_name=f"part_{part_number}_page_{page}.png"
         )
-        
+
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+
+    finally:
+        if doc:
+            doc.close()
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
 
 
 # ============================================================================

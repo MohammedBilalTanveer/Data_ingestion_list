@@ -1,0 +1,275 @@
+/* ── Full-page login overlay ─────────────────────────────────────────────────── */
+
+.lp-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(ellipse at 60% 20%, #1a237e 0%, #0d1b4b 60%, #060d2a 100%);
+  z-index: 9999;
+  padding: 20px;
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+/* ── Tricolor bar ────────────────────────────────────────────────────────────── */
+.lp-tricolor {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  height: 5px;
+}
+
+.lp-tricolor-bottom {
+  top: auto;
+  bottom: 0;
+}
+
+.lp-saffron { flex: 1; background: #FF9933; }
+.lp-white   { flex: 1; background: #FFFFFF; }
+.lp-green   { flex: 1; background: #138808; }
+
+/* ── Card ────────────────────────────────────────────────────────────────────── */
+.lp-card {
+  background: white;
+  border-radius: 20px;
+  padding: 48px 44px;
+  width: 100%;
+  max-width: 440px;
+  box-shadow:
+    0 40px 80px rgba(0,0,0,0.5),
+    0 0 0 1px rgba(255,255,255,0.06);
+  animation: lpSlideUp 0.45s cubic-bezier(0.16,1,0.3,1) forwards;
+  position: relative;
+  overflow: hidden;
+}
+
+.lp-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 4px;
+  background: linear-gradient(90deg, #FF9933 33%, #ffffff 33% 66%, #138808 66%);
+}
+
+@keyframes lpSlideUp {
+  from { opacity: 0; transform: translateY(28px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0)   scale(1); }
+}
+
+/* ── Logo area ───────────────────────────────────────────────────────────────── */
+.lp-logo-area {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 4px;
+}
+
+.lp-shield {
+  width: 60px;
+  height: 60px;
+  background: linear-gradient(135deg, #1a237e 0%, #283593 100%);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-shadow: 0 4px 16px rgba(26,35,126,0.4);
+}
+
+.lp-shield-icon { font-size: 28px; }
+
+.lp-org-name {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.lp-org-top {
+  font-size: 11px;
+  font-weight: 600;
+  color: #718096;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+
+.lp-org-main {
+  font-size: 17px;
+  font-weight: 800;
+  color: #1a237e;
+  letter-spacing: 0.2px;
+}
+
+.lp-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, #e2e8f0, transparent);
+  margin: 20px 0;
+}
+
+/* ── Headings ────────────────────────────────────────────────────────────────── */
+.lp-title {
+  margin: 0 0 6px 0;
+  font-size: 22px;
+  font-weight: 800;
+  color: #1a202c;
+  letter-spacing: -0.3px;
+}
+
+.lp-subtitle {
+  margin: 0 0 28px 0;
+  font-size: 13px;
+  color: #718096;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.lp-lock { font-size: 14px; }
+
+/* ── Form ────────────────────────────────────────────────────────────────────── */
+.lp-form { display: flex; flex-direction: column; gap: 18px; }
+
+.lp-field { display: flex; flex-direction: column; gap: 6px; }
+
+.lp-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: #2d3748;
+  letter-spacing: 0.2px;
+}
+
+.lp-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.lp-input-icon {
+  position: absolute;
+  left: 14px;
+  font-size: 16px;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.lp-input {
+  width: 100%;
+  padding: 13px 14px 13px 44px;
+  border: 2px solid #e2e8f0;
+  border-radius: 10px;
+  font-size: 15px;
+  font-family: inherit;
+  background: #f8fafc;
+  color: #1a202c;
+  transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+  box-sizing: border-box;
+}
+
+.lp-input:focus {
+  outline: none;
+  border-color: #1a237e;
+  background: white;
+  box-shadow: 0 0 0 4px rgba(26,35,126,0.1);
+}
+
+.lp-input:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.lp-input-pass { padding-right: 44px; }
+
+.lp-toggle-pass {
+  position: absolute;
+  right: 12px;
+  background: none;
+  border: none;
+  font-size: 17px;
+  cursor: pointer;
+  padding: 4px;
+  opacity: 0.6;
+  transition: opacity 0.2s;
+}
+
+.lp-toggle-pass:hover { opacity: 1; }
+
+/* ── Error ───────────────────────────────────────────────────────────────────── */
+.lp-error {
+  background: #fff5f5;
+  border: 1px solid #fc8181;
+  border-left: 4px solid #e53e3e;
+  color: #c53030;
+  padding: 12px 14px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+/* ── Submit button ───────────────────────────────────────────────────────────── */
+.lp-submit {
+  padding: 15px;
+  background: linear-gradient(135deg, #1a237e 0%, #283593 50%, #3949ab 100%);
+  color: white;
+  border: none;
+  border-radius: 10px;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  letter-spacing: 0.5px;
+  transition: all 0.25s;
+  margin-top: 4px;
+  box-shadow: 0 4px 16px rgba(26,35,126,0.35);
+}
+
+.lp-submit:hover:not(:disabled) {
+  background: linear-gradient(135deg, #1565c0 0%, #1976d2 100%);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(26,35,126,0.45);
+}
+
+.lp-submit:disabled { opacity: 0.7; cursor: not-allowed; }
+
+.lp-submit-loading { background: #4a5568 !important; }
+
+/* ── Spinner ─────────────────────────────────────────────────────────────────── */
+.lp-spinner-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.lp-spinner {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border: 3px solid rgba(255,255,255,0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: lpSpin 0.75s linear infinite;
+}
+
+@keyframes lpSpin { to { transform: rotate(360deg); } }
+
+/* ── Footer ──────────────────────────────────────────────────────────────────── */
+.lp-footer {
+  margin: 24px 0 0 0;
+  font-size: 11px;
+  color: #a0aec0;
+  text-align: center;
+  border-top: 1px solid #e2e8f0;
+  padding-top: 16px;
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────────────── */
+@media (max-width: 480px) {
+  .lp-card { padding: 36px 24px; }
+  .lp-title { font-size: 19px; }
+}
